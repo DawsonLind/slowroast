@@ -39,3 +39,11 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# Slowroast additions
+.env.local
+.env*.local
+references/
+evals/results/*.json
+!evals/results/.gitkeep
+.claude/local/
