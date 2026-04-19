@@ -11,12 +11,14 @@ import { runImageSpecialist } from "@/lib/agents/image";
 import { runBundleSpecialist } from "@/lib/agents/bundle";
 import { runCacheSpecialist } from "@/lib/agents/cache";
 import { runCwvSpecialist } from "@/lib/agents/cwv";
-import { runSynth } from "@/lib/synth";
+import { runSynth, SynthFailedError, type SynthAttempt } from "@/lib/synth";
 import type {
   FindingCategory,
   Report,
   SpecialistOutput,
 } from "@/lib/schemas";
+
+export type { SynthAttempt } from "@/lib/synth";
 
 // Phase budgets. Independent hard caps — a slow PSI does NOT steal time from
 // specialists. Route-level maxDuration = 120s adds a safety net above these.
@@ -63,12 +65,22 @@ export type PipelineErrorKind =
 export class PipelineError extends Error {
   readonly kind: PipelineErrorKind;
   readonly cause?: unknown;
+  // Present only for kind: "synth" when runSynth exhausted all attempts or
+  // timed out mid-loop. Carries each attempt's raw Sonnet output + ZodError
+  // issues so the eval harness can persist them for diagnosis.
+  readonly synthAttempts?: SynthAttempt[];
 
-  constructor(kind: PipelineErrorKind, message: string, cause?: unknown) {
+  constructor(
+    kind: PipelineErrorKind,
+    message: string,
+    cause?: unknown,
+    synthAttempts?: SynthAttempt[],
+  ) {
     super(message);
     this.name = "PipelineError";
     this.kind = kind;
     this.cause = cause;
+    this.synthAttempts = synthAttempts;
   }
 }
 
@@ -100,6 +112,10 @@ export interface AnalysisResult {
   degradedSpecialists: FindingCategory[];
   htmlBlocked: boolean;
   phaseTimings: PhaseTimings;
+  // Per-attempt history from runSynth. Always at least one entry. An eventual
+  // success after retries still surfaces the intermediate failure payloads
+  // so we can learn from transient misses.
+  synthAttempts: SynthAttempt[];
 }
 
 export interface RunAnalysisOptions {
@@ -196,37 +212,54 @@ export async function runAnalysis(
     : synthController.signal;
 
   const synthStartedAt = Date.now();
-  let synthOutput;
+  let synthResult;
   try {
-    synthOutput = await runSynth(url, outputs, { signal: synthSignal });
+    synthResult = await runSynth(url, outputs, { signal: synthSignal });
   } catch (err) {
     const synthElapsed = Date.now() - synthStartedAt;
+    // SynthFailedError carries the per-attempt history. Whether we got here
+    // via exhausted retries, abort, or non-schema error, the attempts array
+    // is what downstream diagnosis actually needs.
+    const attempts =
+      err instanceof SynthFailedError ? err.attempts : undefined;
     if (synthController.signal.aborted) {
       console.error(
-        `[pipeline] synth phase timed out after ${synthElapsed}ms (cap=${synthTimeoutMs}ms)`,
+        `[pipeline] synth phase timed out after ${synthElapsed}ms (cap=${synthTimeoutMs}ms, attempts=${attempts?.length ?? 0})`,
       );
       throw new PipelineError(
         "synth",
         `synthesis timed out after ${synthTimeoutMs}ms`,
         err,
+        attempts,
       );
     }
     if (opts.signal?.aborted) {
-      throw new PipelineError("aborted", "analysis aborted by caller", err);
+      throw new PipelineError(
+        "aborted",
+        "analysis aborted by caller",
+        err,
+        attempts,
+      );
     }
     console.error(
-      `[pipeline] synth phase failed after ${synthElapsed}ms: ${errorMessage(err)}`,
+      `[pipeline] synth phase failed after ${synthElapsed}ms (attempts=${attempts?.length ?? 0}): ${errorMessage(err)}`,
     );
     throw new PipelineError(
       "synth",
       `synthesis failed: ${errorMessage(err)}`,
       err,
+      attempts,
     );
   } finally {
     clearTimeout(synthTimer);
   }
+  const synthOutput = synthResult.output;
+  const synthAttempts = synthResult.attempts;
   const synthMs = Date.now() - synthStartedAt;
-  console.error(`[pipeline] synth phase ok in ${synthMs}ms`);
+  const retryCount = synthAttempts.length - 1;
+  console.error(
+    `[pipeline] synth phase ok in ${synthMs}ms (attempts=${synthAttempts.length}${retryCount > 0 ? `, recovered-from-${retryCount}-failures` : ""})`,
+  );
 
   const report: Report = {
     url: psi.finalUrl,
@@ -253,6 +286,7 @@ export async function runAnalysis(
     degradedSpecialists,
     htmlBlocked: htmlResult.blocked,
     phaseTimings,
+    synthAttempts,
   };
 }
 

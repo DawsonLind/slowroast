@@ -1,21 +1,44 @@
-import { generateObject } from "ai";
+import { generateObject, NoObjectGeneratedError } from "ai";
 import { gateway } from "@ai-sdk/gateway";
 import { z } from "zod";
 import type { Finding, SpecialistOutput } from "@/lib/schemas";
 import { FindingWithValidatedFeatureSchema } from "@/lib/vercel-features";
 
-// Strict subset of ReportSchema that the MODEL emits. url + generatedAt are
-// stamped in code after validation — no reason to let the model mangle an ISO
-// timestamp or echo a URL that's already in our hand. Findings use the strict
-// feature-id-validated shape so Zod rejects a hallucinated catalog entry at
-// parse time instead of shipping a broken report downstream.
-const SynthOutputSchema = z.object({
+// Two schemas here — deliberate. The MODEL-FACING schema is permissive about
+// the one shape Sonnet refuses to emit correctly; the DOWNSTREAM-FACING schema
+// is strict and canonical. runSynth coerces between the two.
+//
+// Why: eval runs (evals/results.json, 2026-04-19) showed Sonnet systematically
+// emitting `relatedFindings` values as finding-ID STRINGS (e.g. "gtm-blocking-
+// render") rather than arrays of full Finding objects. The model's mental
+// model is "related finding = ID reference," and when there's a single
+// relation it emits a bare string rather than a single-element array. All 9
+// exhausted-retry failures had identical zodIssue shape: {expected: "array",
+// received: "string", path: ["relatedFindings", "<id>"]}. Retry doesn't help
+// — same inputs produce the same structural mistake. Loosening to accept
+// string | string[] at the model layer and coercing to string[] before
+// handoff is lossless (a single-element array IS the single-string case) and
+// matches the "narrow model output, stamp canonical shape in code" pattern
+// we already use for url and generatedAt.
+//
+// url + generatedAt are stamped in code after validation — no reason to let
+// the model mangle an ISO timestamp or echo a URL we already hold. Findings
+// use the strict feature-id-validated shape so Zod rejects a hallucinated
+// catalog entry at parse time.
+const ModelSynthOutputSchema = z.object({
   executiveSummary: z.string().min(1),
   topPriority: FindingWithValidatedFeatureSchema.optional(),
   findings: z.array(FindingWithValidatedFeatureSchema),
   relatedFindings: z
-    .record(z.string(), z.array(FindingWithValidatedFeatureSchema))
+    .record(z.string(), z.union([z.array(z.string()), z.string()]))
     .optional(),
+});
+
+export const SynthOutputSchema = z.object({
+  executiveSummary: z.string().min(1),
+  topPriority: FindingWithValidatedFeatureSchema.optional(),
+  findings: z.array(FindingWithValidatedFeatureSchema),
+  relatedFindings: z.record(z.string(), z.array(z.string())).optional(),
 });
 export type SynthOutput = z.infer<typeof SynthOutputSchema>;
 
@@ -46,6 +69,58 @@ CONSTRAINTS
 - relatedFindings is optional and should usually be omitted for v1 — specialists have tight scope boundaries and same-root-cause duplicates are rare. Only populate it if you see two findings from different lanes that truly describe the same root cause.
 - executiveSummary is prose in plain text. No markdown headings, no bullet lists, no "TL;DR" preambles.`;
 
+// Retry policy: 3 total attempts with linear backoff. Picked because the
+// initial eval run (evals/results.json, 2026-04-19) showed 10 of 12 failures
+// as NoObjectGeneratedError scattered across 6 of 7 URLs — same inputs
+// succeeded on some runs, failed on others. That's the signature of
+// non-systematic structured-output variance, exactly the failure mode
+// resampling fixes. We keep the strict catalog-enum schema and the prompt
+// unchanged; if retry doesn't land us >80% the captured attempt history will
+// tell us which field Sonnet is actually tripping on.
+const MAX_SYNTH_ATTEMPTS = 3;
+const SYNTH_RETRY_BASE_DELAY_MS = 500;
+
+// Keep the attempt record small. Sonnet emits plenty of tokens; 2 KiB is
+// enough to see malformed fields / enum near-misses / truncation without
+// bloating results.json.
+const RAW_TEXT_CAP_BYTES = 2048;
+
+export interface SynthAttempt {
+  // 1-based so log lines read naturally ("attempt 1/3 failed").
+  attemptIndex: number;
+  outcome: "success" | "failure";
+  durationMs: number;
+  // Present only on failures. Sonnet's raw text (truncated) is what actually
+  // tells us which field the model got wrong — "No object generated" alone is
+  // not diagnostic.
+  rawText?: string;
+  // Present only when the cause is a ZodError (schema validation failure).
+  // Other NoObjectGeneratedError causes (JSON parse errors, tool-call-mode
+  // variants) will be missing this — rawText still carries the payload.
+  zodIssues?: unknown[];
+  // Present only on failures. The flattened Error.message for quick scanning.
+  errorMessage?: string;
+}
+
+export interface SynthResult {
+  output: SynthOutput;
+  attempts: SynthAttempt[];
+}
+
+// Surfaced when all MAX_SYNTH_ATTEMPTS exhaust. Carries the full attempt
+// history so pipeline.ts can bubble it into PipelineError and the eval
+// harness persists it verbatim.
+export class SynthFailedError extends Error {
+  readonly attempts: SynthAttempt[];
+  readonly cause?: unknown;
+  constructor(message: string, attempts: SynthAttempt[], cause?: unknown) {
+    super(message);
+    this.name = "SynthFailedError";
+    this.attempts = attempts;
+    this.cause = cause;
+  }
+}
+
 export interface RunSynthOptions {
   signal?: AbortSignal;
 }
@@ -54,18 +129,179 @@ export async function runSynth(
   url: string,
   outputs: SpecialistOutput[],
   opts: RunSynthOptions = {},
-): Promise<SynthOutput> {
-  const { object } = await generateObject({
-    model: gateway("anthropic/claude-sonnet-4.6"),
-    schema: SynthOutputSchema,
-    system: INSTRUCTIONS,
-    prompt: buildSynthPrompt(url, outputs),
-    abortSignal: opts.signal,
-    providerOptions: {
-      gateway: { order: ["anthropic", "openai"] },
-    },
-  });
-  return object;
+): Promise<SynthResult> {
+  const attempts: SynthAttempt[] = [];
+  const prompt = buildSynthPrompt(url, outputs);
+
+  for (let i = 1; i <= MAX_SYNTH_ATTEMPTS; i++) {
+    if (opts.signal?.aborted) {
+      throw new SynthFailedError(
+        "synth aborted before attempt",
+        attempts,
+        opts.signal.reason,
+      );
+    }
+
+    const startedAt = Date.now();
+    try {
+      const { object } = await generateObject({
+        model: gateway("anthropic/claude-sonnet-4.6"),
+        schema: ModelSynthOutputSchema,
+        system: INSTRUCTIONS,
+        prompt,
+        abortSignal: opts.signal,
+        providerOptions: {
+          gateway: { order: ["anthropic", "openai"] },
+        },
+      });
+      const output = coerceSynthOutput(object);
+      attempts.push({
+        attemptIndex: i,
+        outcome: "success",
+        durationMs: Date.now() - startedAt,
+      });
+      return { output, attempts };
+    } catch (err) {
+      const durationMs = Date.now() - startedAt;
+      attempts.push(buildFailureAttempt(i, durationMs, err));
+
+      // Caller-driven cancellation (upstream timeout or client disconnect):
+      // don't burn further attempts, surface immediately with the one
+      // failure recorded.
+      if (opts.signal?.aborted) {
+        throw new SynthFailedError(
+          `synth aborted during attempt ${i}`,
+          attempts,
+          err,
+        );
+      }
+
+      // Non-schema failures (gateway 5xx, network) shouldn't retry blindly.
+      // The AI SDK's own network retry has already run by the time we see
+      // this error; re-calling generateObject repeats any transient work
+      // without new information.
+      if (!NoObjectGeneratedError.isInstance(err)) {
+        throw new SynthFailedError(
+          `synth attempt ${i} failed with non-schema error: ${errorMessage(err)}`,
+          attempts,
+          err,
+        );
+      }
+
+      if (i === MAX_SYNTH_ATTEMPTS) {
+        throw new SynthFailedError(
+          `synth failed after ${MAX_SYNTH_ATTEMPTS} attempts: all NoObjectGeneratedError`,
+          attempts,
+          err,
+        );
+      }
+
+      // Linear backoff: 500ms after attempt 1, 1000ms after attempt 2.
+      // Short enough to fit in the phase timeout alongside actual synth time,
+      // long enough to avoid hammering the gateway.
+      await sleep(i * SYNTH_RETRY_BASE_DELAY_MS);
+    }
+  }
+
+  // Defensive: the loop always returns or throws above.
+  throw new SynthFailedError("synth loop exited unexpectedly", attempts);
+}
+
+function buildFailureAttempt(
+  attemptIndex: number,
+  durationMs: number,
+  err: unknown,
+): SynthAttempt {
+  const attempt: SynthAttempt = {
+    attemptIndex,
+    outcome: "failure",
+    durationMs,
+    errorMessage: errorMessage(err),
+  };
+
+  if (NoObjectGeneratedError.isInstance(err)) {
+    if (typeof err.text === "string" && err.text.length > 0) {
+      attempt.rawText = truncate(err.text, RAW_TEXT_CAP_BYTES);
+    }
+    // The AI SDK wraps ZodError in TypeValidationError, so the real .issues
+    // array lives one level deeper (NoObjectGeneratedError.cause →
+    // TypeValidationError.cause → ZodError). We walk up to 4 hops looking
+    // for any cause with a structured issues array — duck-typed to stay
+    // tolerant of SDK/zod internals drift.
+    const issues = findZodIssues(err.cause);
+    if (issues) attempt.zodIssues = issues;
+  }
+
+  return attempt;
+}
+
+// Convert a permissive model output into the canonical SynthOutput shape by
+// wrapping any bare-string relatedFindings value into a single-element array.
+// No-op when relatedFindings is absent or already canonical. Logs the coercion
+// count so we can see how often Sonnet emits the bare-string form in the
+// wild — relevant signal for whether to eventually retire the union.
+function coerceSynthOutput(
+  model: z.infer<typeof ModelSynthOutputSchema>,
+): SynthOutput {
+  if (!model.relatedFindings) {
+    return {
+      executiveSummary: model.executiveSummary,
+      topPriority: model.topPriority,
+      findings: model.findings,
+    };
+  }
+
+  const coerced: Record<string, string[]> = {};
+  let coercionsFired = 0;
+  for (const [key, value] of Object.entries(model.relatedFindings)) {
+    if (typeof value === "string") {
+      coerced[key] = [value];
+      coercionsFired++;
+    } else {
+      coerced[key] = value;
+    }
+  }
+
+  if (coercionsFired > 0) {
+    console.error(
+      `[synth] coerced ${coercionsFired} bare-string value(s) in relatedFindings → single-element array(s)`,
+    );
+  }
+
+  return {
+    executiveSummary: model.executiveSummary,
+    topPriority: model.topPriority,
+    findings: model.findings,
+    relatedFindings: coerced,
+  };
+}
+
+function findZodIssues(cause: unknown, depth = 0): unknown[] | undefined {
+  if (depth > 4 || !cause || typeof cause !== "object") return undefined;
+  if ("issues" in cause) {
+    const issues = (cause as { issues: unknown }).issues;
+    if (Array.isArray(issues)) return issues;
+  }
+  if ("cause" in cause) {
+    return findZodIssues((cause as { cause: unknown }).cause, depth + 1);
+  }
+  return undefined;
+}
+
+function truncate(s: string, byteCap: number): string {
+  // UTF-8 surrogate safety: cap by codepoint rather than byte index so we
+  // never split a multi-byte character. `byteCap` is treated as an
+  // approximate upper bound — close enough for a 2 KiB display cap.
+  if (s.length <= byteCap) return s;
+  return s.slice(0, byteCap) + `…[truncated, ${s.length - byteCap} more chars]`;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
 }
 
 export function buildSynthPrompt(

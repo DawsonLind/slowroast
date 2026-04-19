@@ -17,7 +17,7 @@
 import { writeFileSync, mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { runAnalysis, PipelineError } from "@/lib/pipeline";
-import type { PhaseTimings } from "@/lib/pipeline";
+import type { PhaseTimings, SynthAttempt } from "@/lib/pipeline";
 import type { Finding, FindingCategory, Report } from "@/lib/schemas";
 
 const GOLDEN_URLS: readonly string[] = [
@@ -35,11 +35,14 @@ const GOLDEN_URLS: readonly string[] = [
 // against the golden set showed the 30s synth default timing out consistently
 // on large sites (hulu.com: 3/3 timeouts; reddit.com: timeout + schema fail).
 // Sonnet 4.6 p50 on vercel.com was ~26s — fine — but findings-rich sites push
-// the structured-output call past 30s every time. 60s here is the eval-tier
-// carve-out so the dashboard can show real numbers rather than all failures.
-// The API route keeps 30s so the user-facing UX still fails fast.
+// the structured-output call past 30s every time.
+//
+// Bumped to 150s post-Day-3 when runSynth grew a 3-attempt retry loop on
+// NoObjectGeneratedError. Worst case: 3 × ~45s Sonnet calls + 1.5s backoff.
+// The API route still caps at 30s — user-facing retry happens only if the
+// first attempt returns well under the cap, which is the common case.
 const PSI_TIMEOUT_MS = 60_000;
-const SYNTH_TIMEOUT_MS = 60_000;
+const SYNTH_TIMEOUT_MS = 150_000;
 const DEFAULT_RUNS_PER_URL = 3;
 const OUTPUT_PATH = resolve(process.cwd(), "evals/results.json");
 
@@ -79,6 +82,10 @@ interface SuccessfulRun {
   } | null;
   executiveSummary: string;
   findings: Finding[];
+  // Always at least one entry. A run that succeeded on attempt 2 or 3 still
+  // retains the preceding failure payloads so we don't lose diagnostic signal
+  // when retry saves the day.
+  synthAttempts: SynthAttempt[];
 }
 
 interface FailedRun {
@@ -88,6 +95,11 @@ interface FailedRun {
   finishedAt: string;
   totalWallClockMs: number;
   error: RunError;
+  // Populated only for synth-kind failures where PipelineError carried an
+  // attempts array (exhausted retries, synth-phase timeout, or non-schema
+  // thrown mid-loop). Other failure kinds (psi, all_specialists_failed,
+  // aborted) omit this.
+  synthAttempts?: SynthAttempt[];
 }
 
 type RunRecord = SuccessfulRun | FailedRun;
@@ -211,13 +223,20 @@ async function main(): Promise<void> {
         const record = toSuccessfulRun(r, runStartedAt, finishedAt, totalWallClockMs, result.report, result);
         runs.push(record);
         runsSucceeded += 1;
+        const synthRetries = record.synthAttempts.length - 1;
+        const retrySuffix =
+          synthRetries > 0
+            ? ` | synthAttempts=${record.synthAttempts.length} (recovered)`
+            : "";
         console.error(
-          `[eval]   ✓ run ${r + 1} ok in ${totalWallClockMs}ms | findings=${record.findings.length} | top=${record.topPriority?.id ?? "(none)"} | htmlBlocked=${record.htmlBlocked} | degraded=[${record.degradedSpecialists.join(",")}]`,
+          `[eval]   ✓ run ${r + 1} ok in ${totalWallClockMs}ms | findings=${record.findings.length} | top=${record.topPriority?.id ?? "(none)"} | htmlBlocked=${record.htmlBlocked} | degraded=[${record.degradedSpecialists.join(",")}]${retrySuffix}`,
         );
       } catch (err) {
         const finishedAt = new Date().toISOString();
         const totalWallClockMs = Date.now() - runStartMs;
         const errorRecord = toRunError(err);
+        const synthAttempts =
+          err instanceof PipelineError ? err.synthAttempts : undefined;
         runs.push({
           index: r,
           status: "failed",
@@ -225,10 +244,14 @@ async function main(): Promise<void> {
           finishedAt,
           totalWallClockMs,
           error: errorRecord,
+          synthAttempts,
         });
         runsFailed += 1;
+        const attemptSuffix = synthAttempts
+          ? ` | synthAttempts=${synthAttempts.length}`
+          : "";
         console.error(
-          `[eval]   ✗ run ${r + 1} failed in ${totalWallClockMs}ms: ${errorRecord.kind}: ${errorRecord.message}`,
+          `[eval]   ✗ run ${r + 1} failed in ${totalWallClockMs}ms: ${errorRecord.kind}: ${errorRecord.message}${attemptSuffix}`,
         );
       }
 
@@ -299,6 +322,7 @@ interface AnalysisResultLike {
   degradedSpecialists: FindingCategory[];
   htmlBlocked: boolean;
   phaseTimings: PhaseTimings;
+  synthAttempts: SynthAttempt[];
 }
 
 function toSuccessfulRun(
@@ -331,6 +355,7 @@ function toSuccessfulRun(
       : null,
     executiveSummary: report.executiveSummary,
     findings: report.findings,
+    synthAttempts: result.synthAttempts,
   };
 }
 

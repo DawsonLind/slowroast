@@ -51,8 +51,13 @@ export const ReportSchema = z.object({
   // non-empty; downstream UI renders a "no issues found" branch otherwise.
   topPriority: FindingSchema.optional(),
   findings: z.array(FindingSchema),
-  // Evidence from multiple specialists merged into one finding during synthesis.
-  relatedFindings: z.record(z.string(), z.array(FindingSchema)).optional(),
+  // Map from a finding id to the ids of other findings that share its root
+  // cause — used when the synthesizer sees two specialists describe the same
+  // issue and wants to link them without duplicating payload. IDs, not full
+  // Finding objects: that matches the model's natural output shape (see
+  // lib/synth.ts ModelSynthOutputSchema), avoids duplication, and keeps the
+  // UI free to resolve the link itself.
+  relatedFindings: z.record(z.string(), z.array(z.string())).optional(),
 });
 export type Report = z.infer<typeof ReportSchema>;
 
