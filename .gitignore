@@ -47,3 +47,5 @@ references/
 evals/results/*.json
 !evals/results/.gitkeep
 .claude/local/
+.claude/
+*.log
