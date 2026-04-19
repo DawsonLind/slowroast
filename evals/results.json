@@ -1,0 +1,839 @@
+{
+  "meta": {
+    "startedAt": "2026-04-19T20:24:10.881Z",
+    "finishedAt": "2026-04-19T20:39:37.490Z",
+    "totalWallClockMs": 926609,
+    "runsAttempted": 10,
+    "runsSucceeded": 4,
+    "runsFailed": 6,
+    "urlsWithInconsistentTopPriority": [],
+    "runsPerUrl": 3,
+    "psiTimeoutMs": 60000,
+    "synthTimeoutMs": 60000
+  },
+  "urls": [
+    {
+      "url": "https://hulu.com",
+      "runs": [
+        {
+          "index": 0,
+          "status": "failed",
+          "startedAt": "2026-04-19T20:24:10.884Z",
+          "finishedAt": "2026-04-19T20:25:49.160Z",
+          "totalWallClockMs": 98276,
+          "error": {
+            "kind": "synth",
+            "message": "synthesis failed: No object generated: response did not match schema."
+          }
+        },
+        {
+          "index": 1,
+          "status": "success",
+          "startedAt": "2026-04-19T20:25:49.168Z",
+          "finishedAt": "2026-04-19T20:27:40.227Z",
+          "totalWallClockMs": 111059,
+          "error": null,
+          "htmlBlocked": false,
+          "degradedSpecialists": [],
+          "phaseTimings": {
+            "psiMs": 36501,
+            "imageMs": 8556,
+            "bundleMs": 20052,
+            "cacheMs": 15975,
+            "cwvMs": 9785,
+            "specialistPhaseMs": 29841,
+            "synthMs": 44675,
+            "totalMs": 111058
+          },
+          "findingsByCategory": {
+            "image": 1,
+            "bundle": 4,
+            "cache": 3,
+            "cwv": 0
+          },
+          "topPriority": {
+            "id": "redirect-chain-delay",
+            "vercelFeatureId": "cdn-bypass",
+            "category": "cache",
+            "severity": "critical"
+          },
+          "executiveSummary": "Hulu's welcome page scores 35/100 on PageSpeed Insights, with a catastrophic LCP of 20.5 seconds, TBT of 1,040ms, and a 1.9-second redirect chain hitting visitors before a single byte of useful content is delivered. Three specialist lanes — image, bundle, and cache — all surfaced concrete, high-confidence findings. The CWV specialist produced no independent findings but correctly attributed the LCP and TBT failures to the other lanes, confirming that these are the right problems to solve. No specialist lane failed.\n\nThe single highest-leverage fix is eliminating the three-hop redirect chain (hulu.com → http://www.hulu.com → https://www.hulu.com), which wastes 1.9 seconds before the browser can even begin fetching the document. This is a configuration-level change with near-zero engineering effort and a direct, measurable payoff on every metric. Close behind it are the two critical bundle issues: 926 KiB of unused JavaScript inflates bootup time to 3.1 seconds, with chunk 956 alone burning 398 KiB on dead cryptography code and Tealium's utag.js consuming 752ms of scripting time. Deferring Facebook Pixel (93% unused, 92 KiB) via next/script strategy and removing the no-store cache directive on the root document round out the highest-return fixes. The root document's no-store policy means every visitor incurs a full origin round-trip, compounding the redirect penalty for every single page view.\n\nThe image finding — missing width/height on above-the-fold brand logos — contributes an additional 100–150ms LCP penalty and is the easiest code-level fix in the report (a two-attribute change in the Next.js Image component). Taken together, resolving the redirect chain, rehydrating the cache policy, code-splitting the crypto bundle, and deferring third-party scripts should recover multiple seconds of LCP and bring TBT well below the 200ms passing threshold. The team should sequence these as: (1) redirect consolidation and cache-control relaxation as infra/config work, (2) bundle tree-shaking and next/script migration as sprint-level engineering, (3) image dimension fixes as a fast follow.",
+          "findings": [
+            {
+              "id": "redirect-chain-delay",
+              "title": "Redirect chain delays initial page load by ~1.9 seconds",
+              "severity": "critical",
+              "confidence": 1,
+              "category": "cache",
+              "affectedResources": [
+                "https://hulu.com/",
+                "http://www.hulu.com/",
+                "https://www.hulu.com/"
+              ],
+              "estimatedImpact": "~1.9 seconds wasted on three HTTP redirects before reaching final document",
+              "vercelFeatureId": "cdn-bypass",
+              "evidence": "redirects audit shows 780ms (https://hulu.com/), 630ms (http://www.hulu.com/), and 481ms (https://www.hulu.com/) wasted; network-requests confirms protocol=http/1.1 on first two hops, indicating non-Vercel origin infrastructure"
+            },
+            {
+              "id": "hulu-unused-js-926kb",
+              "title": "926 KiB of unused JavaScript blocking page load",
+              "severity": "critical",
+              "confidence": 0.95,
+              "category": "bundle",
+              "affectedResources": [
+                "https://www.hulu.com/static/hitch/_next/static/chunks/956-636e8d07906a36f1bc93.js",
+                "https://connect.facebook.net/en_US/fbevents.js"
+              ],
+              "estimatedImpact": "~3.2s bootup reduction, up to 900ms TBT savings",
+              "vercelFeatureId": "react-compiler",
+              "evidence": "Lighthouse unused-javascript audit: 926 KiB wasted bytes (overallSavingsBytes=926568), 73% of chunk 956 is unused cryptography code (bn.js duplicates from diffie-hellman, elliptic, create-ecdh). Bootup-time is 3.1s with scripting dominating. Chunk 956 contributes 232ms of the 3.1s total."
+            },
+            {
+              "id": "hulu-bootup-time-3100ms",
+              "title": "Bootup time at 3.1s due to heavy script parsing and execution",
+              "severity": "critical",
+              "confidence": 0.9,
+              "category": "bundle",
+              "affectedResources": [
+                "https://tags.tiqcdn.com/utag/hulu/main/prod/utag.js",
+                "https://www.hulu.com/static/hitch/_next/static/chunks/pages/LandingPage-9ac9d69938e3d4f0caf0.js",
+                "https://www.hulu.com/static/hitch/_next/static/chunks/956-636e8d07906a36f1bc93.js"
+              ],
+              "estimatedImpact": "~1.5–2s scriptParseCompile + scripting reduction via lazy-loading third-party and code-splitting",
+              "vercelFeatureId": "next-script-strategy",
+              "evidence": "bootup-time audit shows 3.1s total. Tealium (utag.js) contributes 752ms (43ms parseCompile, 692ms scripting); LandingPage chunk contributes 776ms (719ms scripting). No async/defer attributes on third-party tags in raw inventory."
+            },
+            {
+              "id": "non-vercel-origin",
+              "title": "Site served from unknown CDN provider with Envoy origin, not Vercel Edge Network",
+              "severity": "high",
+              "confidence": 0.95,
+              "category": "cache",
+              "affectedResources": [
+                "/"
+              ],
+              "estimatedImpact": "Missing Vercel Edge caching; slower TTFB and higher origin load; performance score 35/100 suggests suboptimal delivery",
+              "vercelFeatureId": "cdn-bypass",
+              "evidence": "CDN provider identified as 'unknown'; server header reports 'envoy' (not Vercel); x-vercel-cache header absent; root document took 72ms TTFB on origin, but redirect chain adds 1.9s total latency"
+            },
+            {
+              "id": "hulu-chunk-956-unused-cryptography",
+              "title": "Chunk 956 bloated with 398 KiB of unused cryptography dependencies",
+              "severity": "high",
+              "confidence": 0.88,
+              "category": "bundle",
+              "affectedResources": [
+                "https://www.hulu.com/static/hitch/_next/static/chunks/956-636e8d07906a36f1bc93.js"
+              ],
+              "estimatedImpact": "~400 KiB byte reduction, ~120ms parse/compile savings",
+              "vercelFeatureId": "react-compiler",
+              "evidence": "unused-javascript details show chunk 956 (544 KiB) wastes 398 KiB (73% of chunk) on bn.js duplicates in node_modules/diffie-hellman, node_modules/create-ecdh, node_modules/elliptic, node_modules/miller-rabin. These crypto stubs should be code-split or removed."
+            },
+            {
+              "id": "hulu-facebook-pixel-unused",
+              "title": "Facebook Pixel (fbevents.js) 93% unused, adds 92 KiB waste",
+              "severity": "high",
+              "confidence": 0.85,
+              "category": "bundle",
+              "affectedResources": [
+                "https://connect.facebook.net/en_US/fbevents.js"
+              ],
+              "estimatedImpact": "~92 KiB byte reduction if deferred or removed; ~100ms bootup savings",
+              "vercelFeatureId": "next-script-strategy",
+              "evidence": "unused-javascript audit: fbevents.js wastes 92 KiB of 98 KiB total (93.9% waste). Script is not in async/defer form in raw inventory; recommend wrapping in next/script with lazyOnload or afterInteractive strategy."
+            },
+            {
+              "id": "html-no-cache-policy",
+              "title": "Root document marked no-store, preventing edge caching for all visitors",
+              "severity": "high",
+              "confidence": 0.85,
+              "category": "cache",
+              "affectedResources": [
+                "/"
+              ],
+              "estimatedImpact": "Every request hits origin; no edge cache reuse between visitors even for static welcome page",
+              "vercelFeatureId": "isr-stale-content",
+              "evidence": "cache-control: max-age=0,no-store,no-cache on root document (https://www.hulu.com/welcome); etag present but no-store prevents any CDN or edge caching"
+            },
+            {
+              "id": "hulu-unsized-images-ribbon",
+              "title": "Missing width/height on above-the-fold brand images causes layout shift and LCP delay",
+              "severity": "high",
+              "confidence": 0.95,
+              "category": "image",
+              "affectedResources": [
+                "//cnbl-cdn.bamgrid.com/assets/eb03279ecf5dd44902cd6203c0a2f93a14d39262e4358f509a4f1547d9ce1f68/original"
+              ],
+              "estimatedImpact": "~100–150ms LCP improvement; eliminates cumulative layout shift from brand logos",
+              "vercelFeatureId": "next-image-priority",
+              "evidence": "Lighthouse unsized-images audit (score=0.5); two occurrences in Ribbon and ExitIntentModal with no width/height attributes and positive bounding rectangles (top=561, height=43; top=391, height=50), indicating above-the-fold placement"
+            }
+          ]
+        },
+        {
+          "index": 2,
+          "status": "failed",
+          "startedAt": "2026-04-19T20:27:40.230Z",
+          "finishedAt": "2026-04-19T20:29:20.169Z",
+          "totalWallClockMs": 99939,
+          "error": {
+            "kind": "synth",
+            "message": "synthesis failed: No object generated: response did not match schema."
+          }
+        }
+      ],
+      "aggregates": {
+        "successfulRuns": 1,
+        "failedRuns": 2,
+        "topPriorityConsistency": {
+          "allSameId": true,
+          "allSameFeatureId": true,
+          "ids": [
+            "redirect-chain-delay"
+          ],
+          "featureIds": [
+            "cdn-bypass"
+          ],
+          "uniqueIdCount": 1,
+          "uniqueFeatureIdCount": 1
+        },
+        "findingsCountByCategory": {
+          "image": {
+            "min": 1,
+            "max": 1,
+            "p50": 1
+          },
+          "bundle": {
+            "min": 4,
+            "max": 4,
+            "p50": 4
+          },
+          "cache": {
+            "min": 3,
+            "max": 3,
+            "p50": 3
+          },
+          "cwv": {
+            "min": 0,
+            "max": 0,
+            "p50": 0
+          }
+        },
+        "uniqueCatalogFeatures": [
+          "cdn-bypass",
+          "isr-stale-content",
+          "next-image-priority",
+          "next-script-strategy",
+          "react-compiler"
+        ],
+        "phaseTimings": {
+          "psi": {
+            "p50": 36501,
+            "max": 36501
+          },
+          "image": {
+            "p50": 8556,
+            "max": 8556
+          },
+          "bundle": {
+            "p50": 20052,
+            "max": 20052
+          },
+          "cache": {
+            "p50": 15975,
+            "max": 15975
+          },
+          "cwv": {
+            "p50": 9785,
+            "max": 9785
+          },
+          "specialistPhase": {
+            "p50": 29841,
+            "max": 29841
+          },
+          "synth": {
+            "p50": 44675,
+            "max": 44675
+          },
+          "total": {
+            "p50": 111058,
+            "max": 111058
+          }
+        },
+        "htmlBlockedAnyRun": false,
+        "degradedSpecialistsUnion": []
+      }
+    },
+    {
+      "url": "https://reddit.com",
+      "runs": [
+        {
+          "index": 0,
+          "status": "success",
+          "startedAt": "2026-04-19T20:29:20.174Z",
+          "finishedAt": "2026-04-19T20:30:42.511Z",
+          "totalWallClockMs": 82337,
+          "error": null,
+          "htmlBlocked": false,
+          "degradedSpecialists": [],
+          "phaseTimings": {
+            "psiMs": 29986,
+            "imageMs": 2475,
+            "bundleMs": 15949,
+            "cacheMs": 14664,
+            "cwvMs": 8401,
+            "specialistPhaseMs": 24357,
+            "synthMs": 27967,
+            "totalMs": 82337
+          },
+          "findingsByCategory": {
+            "image": 0,
+            "bundle": 3,
+            "cache": 2,
+            "cwv": 0
+          },
+          "topPriority": {
+            "id": "recaptcha-blocking-render",
+            "vercelFeatureId": "next-script-strategy",
+            "category": "bundle",
+            "severity": "critical"
+          },
+          "executiveSummary": "Reddit's homepage scores 43/100 on performance, with LCP at 5.9s and FCP at 4.4s — both severely outside acceptable thresholds — and a Total Blocking Time of 1,260ms that places the page deep in the critical range. Three specialist lanes (bundle, cache, CWV) produced actionable findings; the image lane found no issues, as Reddit's homepage delivers no traditional `<img>` elements at the HTML level. The CWV specialist confirmed that layout stability (CLS = 0.001) is healthy, meaning the entire remediation agenda is concentrated in JavaScript execution overhead and network delivery latency. Together, five concrete findings explain the majority of the performance deficit.\n\nThe single highest-leverage fix is eliminating the reCAPTCHA synchronous load. That one third-party script contributes 2.3s of main-thread scripting and 370KB of parse/compile work before the page becomes interactive — swapping it to Next.js `afterInteractive` or `lazyOnload` strategy requires a one-line change and recovers roughly 1.2s of bootup time immediately. The second-order wins sit in the same bundle lane: Reddit's own concatenated first-party bundle carries 163KB of unused code (53% waste), and the broader main-thread scripting budget hits 4.1s total, both of which respond to code-splitting and the React Compiler. On the network side, the 780ms redirect chain from reddit.com to www.reddit.com is a pure latency tax paid before a single byte of page content is delivered, and static assets on redditstatic.com lack verified CDN edge-caching, adding 80–100ms per request across dozens of calls. Addressing the redirect via canonical hostname resolution at the edge and confirming proper cache headers on static assets would compound the gains from the JavaScript fixes to bring the overall critical path well below current levels.",
+          "findings": [
+            {
+              "id": "recaptcha-blocking-render",
+              "title": "Large reCAPTCHA payload blocking main thread execution",
+              "severity": "critical",
+              "confidence": 0.95,
+              "category": "bundle",
+              "affectedResources": [
+                "https://www.gstatic.com/recaptcha/releases/gTpTIWhbKpxADzTzkcabhXN4/recaptcha__en.js"
+              ],
+              "estimatedImpact": "~1.2s reduction in main thread blockage (bootup-time audit shows 2.3s scripting + 0.4s parse/compile for reCAPTCHA alone)",
+              "vercelFeatureId": "next-script-strategy",
+              "evidence": "bootup-time audit: reCAPTCHA contributes 2.3s scripting time and 370KB total bytes (3× occurrences in bundle audit). Loading synchronously blocks render. Move to afterInteractive or lazyOnload strategy."
+            },
+            {
+              "id": "reddit-redirect-chain",
+              "title": "Unoptimized redirect chain adds 780ms latency before first byte",
+              "severity": "high",
+              "confidence": 0.95,
+              "category": "cache",
+              "affectedResources": [
+                "https://reddit.com/"
+              ],
+              "estimatedImpact": "780 ms wasted on redirect from reddit.com to www.reddit.com before serving page content",
+              "vercelFeatureId": "edge-config-flags",
+              "evidence": "redirects audit score=0, overallSavingsMs=780; network-requests shows 301 from https://reddit.com/ (2 ms) followed by 303 ms delay before www.reddit.com begins transfer. Redirect can be eliminated by canonical hostname resolution at edge."
+            },
+            {
+              "id": "reddit-concat-bundle-unused-code",
+              "title": "Large Reddit concatenated bundle with 53% unused JavaScript",
+              "severity": "high",
+              "confidence": 0.92,
+              "category": "bundle",
+              "affectedResources": [
+                "https://www.redditstatic.com/js/concat?prefix=en-US/&chunks=..."
+              ],
+              "estimatedImpact": "~163KB byte reduction (52.85% of 309KB bundle is unused per unused-javascript audit)",
+              "vercelFeatureId": "next-script-strategy",
+              "evidence": "unused-javascript audit: 162.6KB wasted bytes in Reddit's concat bundle (52.85% of total). Bundle should be code-split or routes optimized to defer non-critical chunks."
+            },
+            {
+              "id": "main-thread-scripting-bottleneck",
+              "title": "Excessive main thread scripting work causing 4.1s bootup time",
+              "severity": "high",
+              "confidence": 0.88,
+              "category": "bundle",
+              "affectedResources": [
+                "https://www.reddit.com/",
+                "https://www.redditstatic.com/shreddit/en-US/teaJIOXqxK.js"
+              ],
+              "estimatedImpact": "~1.1s reduction in bootup time through client-side optimization and code-splitting (bootup-time score=0; 1.8s scripting in main Reddit JS + 0.4s in shreddit bundle)",
+              "vercelFeatureId": "react-compiler",
+              "evidence": "bootup-time audit shows 4.1s total; main thread scripting dominates (1.1s in main Reddit script, 1.7s in reCAPTCHA, 0.4s in shreddit). React Compiler or aggressive code-splitting needed to reduce client CPU."
+            },
+            {
+              "id": "reddit-no-cdn-posture",
+              "title": "Static assets not served from CDN edge, relying on origin",
+              "severity": "high",
+              "confidence": 0.85,
+              "category": "cache",
+              "affectedResources": [
+                "https://www.redditstatic.com/shreddit/en-US/D1Yw_oqzq7.js",
+                "https://www.redditstatic.com/*"
+              ],
+              "estimatedImpact": "Asset TTFB latency 80–100+ ms higher than edge-cached; multiplied across dozens of requests shown in network-requests",
+              "vercelFeatureId": "cdn-bypass",
+              "evidence": "CDN provider='unknown'; no x-vercel-cache header on root. network-requests shows JavaScript assets from redditstatic.com with protocol=h2, statusCode=200, but no cache-control headers surfaced and no CDN acceleration signal. Root document shows via: varnish but assets lack equivalent caching infrastructure."
+            }
+          ]
+        },
+        {
+          "index": 1,
+          "status": "success",
+          "startedAt": "2026-04-19T20:30:42.518Z",
+          "finishedAt": "2026-04-19T20:32:11.086Z",
+          "totalWallClockMs": 88568,
+          "error": null,
+          "htmlBlocked": false,
+          "degradedSpecialists": [],
+          "phaseTimings": {
+            "psiMs": 21540,
+            "imageMs": 2643,
+            "bundleMs": 17179,
+            "cacheMs": 6431,
+            "cwvMs": 9687,
+            "specialistPhaseMs": 18761,
+            "synthMs": 48263,
+            "totalMs": 88568
+          },
+          "findingsByCategory": {
+            "image": 0,
+            "bundle": 1,
+            "cache": 1,
+            "cwv": 0
+          },
+          "topPriority": {
+            "id": "reddit-unused-js",
+            "vercelFeatureId": "react-compiler",
+            "category": "bundle",
+            "severity": "high"
+          },
+          "executiveSummary": "Reddit's homepage scores a 51/100 on performance, with critically slow LCP (6.7s) and FCP (4.4s) and a TBT of 610ms pointing to deep JavaScript and delivery problems. Two specialist lanes produced actionable findings — bundle and cache — while the image and CWV specialists found no directly attributable issues of their own (no img tags were detected in the HTML, and CWV confirmed that its observed failures trace back to bundle and delivery root causes rather than rendering). Both surviving findings are high-severity and independently confirmed at high confidence.\n\nThe single most important fix is eliminating the 535 KiB of unused JavaScript in Reddit's concatenated bundle. This dead code accounts for over half the concat bundle's weight and drives ~1.2s of unnecessary bootup time — a direct tax on every page load and the primary lever for improving the 51/100 score. Applying the React Compiler or systematic code-splitting and dead-code elimination would yield the largest measurable improvement to LCP, FCP, and TBT simultaneously, since all three metrics are bottlenecked by script parse and execution pressure. The second-order win is eliminating the non-www to www redirect: at 780ms of added latency on every single user request, this is a near-zero-effort DNS or routing configuration change that compounds with the bundle fix to meaningfully accelerate time-to-first-byte and perceived load speed. Taken together, these two remediations address the full causal chain the CWV specialist identified, and should move the performance score substantially above the current 51/100 baseline.",
+          "findings": [
+            {
+              "id": "reddit-unused-js",
+              "title": "Significant unused JavaScript reducing page efficiency",
+              "severity": "high",
+              "confidence": 0.95,
+              "category": "bundle",
+              "affectedResources": [
+                "https://www.gstatic.com/recaptcha/releases/gTpTIWhbKpxADzTzkcabhXN4/recaptcha__en.js",
+                "https://www.redditstatic.com/js/concat?prefix=en-US/&chunks=01t2lMP4nW,1-zTfjKw_m,1izxqmh0Kf,2WTNJPZGtv,2lQIZ4BUO7,32pM_tsHXS,35Uwadoicn,54yFfc10xX,7KnPb9WluG,8O6fMe3pEI,96BxsrBi7l,977RFZ4kAn,97E4TdmGea,9pI9C_SCoR,AU8Y7MKo4w,Ahfdje0Zse,AqXH-2jVy9,B-C4saAC2w,B-RgY1jLnh,B19NRyETRL,B20nU7beoI,B2ADw7Lz2t,B3vflPm_Vk,B5JP8iM4W2,B72JB3bVGa,B7Zznnlsru,B7vj8nbUFU,B7xlh9wXgu,B8Pys2PDO5,B8vaOOl9Xw,B9yNFc40fS,B9ygZ1rKyt,BALhGZu8yo,BBBCbm6F7p,BBJzhmV4zM,BBPXAt7Kow,BCp0lWLdQC,BEnGWN2NMB,BF8PdG1HFy,BHHFVJmOW5,BLe2JHkZWV,BLgpdYWcLg,BMGQDfdSHR,BMNJR_-8oK,BN9rgNir5_,BNKJUeDK08,BOApM87VHz,BP6is0L0XE,BQxIFqz1pZ,BR2DwedDb-,BREAQV-XwG,BTp3JzmDSR,BTtnrTG6-I,BVrHZx_R3F,BVy97OFmx1,BYdXnDQ2ec,BYfB59p29U,BYz0MuJTM6,BZLR7VGvL7,Bb-wwmVI80,BdwvKLMaM2,BfEhxsa_ts,Bg0s1mQahr,Bgt12ds-fo,BhhUd8gXOK,BkR9pOF-Vb,Bne49gTdos,BoMYxRDh2L,BpFVvn6wdO,BqV5FI6KLK,BsKFk4tsuW,Btvsppnb1k,BvC9PO2w9i,BvznVlWbzy,Bw2dJDWiLn,BwTg8i4C7a,BwVKNZJ2rg,BwkQzOzc31,Bwyco10Kj4,BxTuFAXCyK,BxbUQM71Ci,ByUNgGyeHc,BzM7cg8sem,BzXMgkayRC,Bzv2q9mpVK,C1LvBTGunA,C4ovtxA2Sm,C7YglY3cr3,CADcDBfd2X,CAlmIf2nq8,CC8gXhYHZm,CCC0hq2zUU,CDr7bS6BPC,CEGhI4Kzj4,CGnpi6c79n,CHnd35lRN_,CMSwYYoxMl,CO9BEHjyLa,CQy7GesVxH,CR_KmXRPlL"
+              ],
+              "estimatedImpact": "~1.2s bootup-time reduction, ~535 KiB byte savings",
+              "vercelFeatureId": "react-compiler",
+              "evidence": "unused-javascript audit reports 535 KiB of wasted bytes (52.8% of Reddit concat bundle, 44% of reCAPTCHA); bootup-time shows 2.5s total with 1.4s from reCAPTCHA parse/execution and 1.3s from main inline script"
+            },
+            {
+              "id": "reddit-1",
+              "title": "Unnecessary redirect from non-www to www domain adds 780ms latency",
+              "severity": "high",
+              "confidence": 1,
+              "category": "cache",
+              "affectedResources": [
+                "https://reddit.com/"
+              ],
+              "estimatedImpact": "~780 ms latency cost per user",
+              "vercelFeatureId": "use-cache-fetch",
+              "evidence": "Lighthouse redirects audit: request to https://reddit.com/ returns 301 redirect to https://www.reddit.com/, wasting 780 ms"
+            }
+          ]
+        },
+        {
+          "index": 2,
+          "status": "failed",
+          "startedAt": "2026-04-19T20:32:11.089Z",
+          "finishedAt": "2026-04-19T20:33:56.607Z",
+          "totalWallClockMs": 105518,
+          "error": {
+            "kind": "synth",
+            "message": "synthesis failed: No object generated: response did not match schema."
+          }
+        }
+      ],
+      "aggregates": {
+        "successfulRuns": 2,
+        "failedRuns": 1,
+        "topPriorityConsistency": {
+          "allSameId": false,
+          "allSameFeatureId": false,
+          "ids": [
+            "recaptcha-blocking-render",
+            "reddit-unused-js"
+          ],
+          "featureIds": [
+            "next-script-strategy",
+            "react-compiler"
+          ],
+          "uniqueIdCount": 2,
+          "uniqueFeatureIdCount": 2
+        },
+        "findingsCountByCategory": {
+          "image": {
+            "min": 0,
+            "max": 0,
+            "p50": 0
+          },
+          "bundle": {
+            "min": 1,
+            "max": 3,
+            "p50": 1
+          },
+          "cache": {
+            "min": 1,
+            "max": 2,
+            "p50": 1
+          },
+          "cwv": {
+            "min": 0,
+            "max": 0,
+            "p50": 0
+          }
+        },
+        "uniqueCatalogFeatures": [
+          "cdn-bypass",
+          "edge-config-flags",
+          "next-script-strategy",
+          "react-compiler",
+          "use-cache-fetch"
+        ],
+        "phaseTimings": {
+          "psi": {
+            "p50": 21540,
+            "max": 29986
+          },
+          "image": {
+            "p50": 2475,
+            "max": 2643
+          },
+          "bundle": {
+            "p50": 15949,
+            "max": 17179
+          },
+          "cache": {
+            "p50": 6431,
+            "max": 14664
+          },
+          "cwv": {
+            "p50": 8401,
+            "max": 9687
+          },
+          "specialistPhase": {
+            "p50": 18761,
+            "max": 24357
+          },
+          "synth": {
+            "p50": 27967,
+            "max": 48263
+          },
+          "total": {
+            "p50": 82337,
+            "max": 88568
+          }
+        },
+        "htmlBlockedAnyRun": false,
+        "degradedSpecialistsUnion": []
+      }
+    },
+    {
+      "url": "https://developer.mozilla.org",
+      "runs": [
+        {
+          "index": 0,
+          "status": "success",
+          "startedAt": "2026-04-19T20:33:56.609Z",
+          "finishedAt": "2026-04-19T20:35:09.335Z",
+          "totalWallClockMs": 72726,
+          "error": null,
+          "htmlBlocked": false,
+          "degradedSpecialists": [],
+          "phaseTimings": {
+            "psiMs": 16281,
+            "imageMs": 10861,
+            "bundleMs": 10779,
+            "cacheMs": 16063,
+            "cwvMs": 4405,
+            "specialistPhaseMs": 26844,
+            "synthMs": 29587,
+            "totalMs": 72726
+          },
+          "findingsByCategory": {
+            "image": 2,
+            "bundle": 2,
+            "cache": 2,
+            "cwv": 0
+          },
+          "topPriority": {
+            "id": "mdn-redirect-latency",
+            "vercelFeatureId": "edge-config-flags",
+            "category": "cache",
+            "severity": "high"
+          },
+          "executiveSummary": "The Mozilla Developer Network site scores 67/100 on performance, with four specialist lanes evaluated. The CWV lane completed but surfaced no independent findings — it attributes the failing LCP (5.7 s) and FCP (3.9 s) directly to image and bundle deficiencies rather than rendering-layer issues, which is encouraging because it means there is no structural layout or hydration problem to untangle. CLS is healthy at 0.049 and TBT is a low 50 ms at baseline. The image, bundle, and cache lanes each produced concrete, high-confidence findings that together explain the bulk of the performance deficit.\n\nThe single highest-leverage fix is eliminating the 302 redirect from the root URL to the localized path. At ~750 ms of avoidable TTFB latency on every cold entry-point navigation, this redirect is the fastest win available: it requires a routing config change rather than code refactoring, and its impact is felt before any asset even begins to load. Immediately behind it, the two Transcend consent scripts (airgap.js and ui.js) are loading synchronously on the main thread — together they account for up to ~520 ms of additional blocking time and carry roughly 75 KB of unused JavaScript. Wrapping both in next/script with an afterInteractive or lazyOnload strategy would recover that time with a one-line change per script. On the image side, the single PNG contributor asset is unoptimized — converting it to WebP/AVIF and adopting next/image with priority handling would deliver a 15–30% reduction in image bytes and a meaningful LCP improvement once the upstream redirect and script-blocking issues are resolved. The stale HTML cache posture (max-age=3600 with observed age values already past that window) is a lower-urgency correctness issue worth addressing in the same routing config pass as the redirect fix.",
+          "findings": [
+            {
+              "id": "mdn-redirect-latency",
+              "title": "Unnecessary HTTP 302 redirect from root to localized path adds 750 ms latency",
+              "severity": "high",
+              "confidence": 0.95,
+              "category": "cache",
+              "affectedResources": [
+                "https://developer.mozilla.org/"
+              ],
+              "estimatedImpact": "~750 ms TTFB reduction; eliminate round-trip on entry point",
+              "vercelFeatureId": "edge-config-flags",
+              "evidence": "redirects audit score=0, overallSavingsMs=753.697; network-requests shows 302 from https://developer.mozilla.org/ followed by 200 from https://developer.mozilla.org/en-US/"
+            },
+            {
+              "id": "transcend-consent-unmanaged",
+              "title": "Third-party consent/tracking scripts loading synchronously without defer/async",
+              "severity": "high",
+              "confidence": 0.9,
+              "category": "bundle",
+              "affectedResources": [
+                "https://transcend-cdn.com/cm/d556c3a1-e57c-4bdf-a490-390a1aebf6dd/airgap.js"
+              ],
+              "estimatedImpact": "~80ms main-thread reduction; 46% of Transcend scripts are unused (~46 KB savings potential)",
+              "vercelFeatureId": "next-script-strategy",
+              "evidence": "unused-javascript audit shows 55.6% waste in airgap.js (29.5 KB of 53 KB). Script context confirms async=false, defer=false, not next/script-managed. bootup-time shows 80ms parsing + scripting for airgap.js."
+            },
+            {
+              "id": "transcend-ui-unused-bloat",
+              "title": "Transcend UI script with high unused-JavaScript burden blocks interaction readiness",
+              "severity": "high",
+              "confidence": 0.85,
+              "category": "bundle",
+              "affectedResources": [
+                "https://transcend-cdn.com/cm/d556c3a1-e57c-4bdf-a490-390a1aebf6dd/ui.js"
+              ],
+              "estimatedImpact": "~520ms TBT reduction if deferred; 46% unused bytes (~46 KB saved)",
+              "vercelFeatureId": "next-script-strategy",
+              "evidence": "unused-javascript audit: ui.js contributes 46.2% waste (46.4 KB of 100.4 KB). bootup-time shows 147ms total (97ms scripting + 47ms parse/compile). This is a consent/analytics third-party — candidate for afterInteractive or lazyOnload strategy."
+            },
+            {
+              "id": "mdn-png-format-conversion",
+              "title": "PNG image not converted to modern format (WebP/AVIF)",
+              "severity": "medium",
+              "confidence": 0.9,
+              "category": "image",
+              "affectedResources": [
+                "/static/ssr/mdn_contributor.9e2a105f50828d5a.png"
+              ],
+              "estimatedImpact": "~20–30% image byte reduction via WebP/AVIF conversion",
+              "vercelFeatureId": "next-image-formats",
+              "evidence": "PNG format detected (512×323px); served as unoptimized raw <img> without format negotiation. Lighthouse unsized-images audit shows no serverside format optimization."
+            },
+            {
+              "id": "mdn-html-cache-posture",
+              "title": "Root HTML document uses max-age=3600 instead of must-revalidate or no-cache",
+              "severity": "medium",
+              "confidence": 0.75,
+              "category": "cache",
+              "affectedResources": [
+                "/"
+              ],
+              "estimatedImpact": "Risk of stale content served to users; age header shows 3204 s (beyond max-age window on prior caches)",
+              "vercelFeatureId": "route-segment-config",
+              "evidence": "Root cache-control: public, max-age=3600; age: 3204 indicates this response has been cached past its declared max-age, suggesting cache-control mismatch across layers (Varnish via headers)"
+            },
+            {
+              "id": "mdn-unoptimized-img-tag",
+              "title": "Image served as raw <img> instead of next/image component, missing priority and sizing controls",
+              "severity": "medium",
+              "confidence": 0.85,
+              "category": "image",
+              "affectedResources": [
+                "/static/ssr/mdn_contributor.9e2a105f50828d5a.png"
+              ],
+              "estimatedImpact": "~15–25% potential LCP improvement via automatic optimization and priority handling",
+              "vercelFeatureId": "next-image-priority",
+              "evidence": "isNextImage=false; image is above-the-fold (likelyAboveFold=true) with lazy loading but no fetchpriority hint. next/image would enable automatic format conversion, responsive sizing, and priority control."
+            }
+          ]
+        },
+        {
+          "index": 1,
+          "status": "failed",
+          "startedAt": "2026-04-19T20:35:09.338Z",
+          "finishedAt": "2026-04-19T20:36:13.551Z",
+          "totalWallClockMs": 64213,
+          "error": {
+            "kind": "synth",
+            "message": "synthesis failed: No object generated: response did not match schema."
+          }
+        },
+        {
+          "index": 2,
+          "status": "failed",
+          "startedAt": "2026-04-19T20:36:13.554Z",
+          "finishedAt": "2026-04-19T20:37:18.797Z",
+          "totalWallClockMs": 65243,
+          "error": {
+            "kind": "synth",
+            "message": "synthesis failed: No object generated: response did not match schema."
+          }
+        }
+      ],
+      "aggregates": {
+        "successfulRuns": 1,
+        "failedRuns": 2,
+        "topPriorityConsistency": {
+          "allSameId": true,
+          "allSameFeatureId": true,
+          "ids": [
+            "mdn-redirect-latency"
+          ],
+          "featureIds": [
+            "edge-config-flags"
+          ],
+          "uniqueIdCount": 1,
+          "uniqueFeatureIdCount": 1
+        },
+        "findingsCountByCategory": {
+          "image": {
+            "min": 2,
+            "max": 2,
+            "p50": 2
+          },
+          "bundle": {
+            "min": 2,
+            "max": 2,
+            "p50": 2
+          },
+          "cache": {
+            "min": 2,
+            "max": 2,
+            "p50": 2
+          },
+          "cwv": {
+            "min": 0,
+            "max": 0,
+            "p50": 0
+          }
+        },
+        "uniqueCatalogFeatures": [
+          "edge-config-flags",
+          "next-image-formats",
+          "next-image-priority",
+          "next-script-strategy",
+          "route-segment-config"
+        ],
+        "phaseTimings": {
+          "psi": {
+            "p50": 16281,
+            "max": 16281
+          },
+          "image": {
+            "p50": 10861,
+            "max": 10861
+          },
+          "bundle": {
+            "p50": 10779,
+            "max": 10779
+          },
+          "cache": {
+            "p50": 16063,
+            "max": 16063
+          },
+          "cwv": {
+            "p50": 4405,
+            "max": 4405
+          },
+          "specialistPhase": {
+            "p50": 26844,
+            "max": 26844
+          },
+          "synth": {
+            "p50": 29587,
+            "max": 29587
+          },
+          "total": {
+            "p50": 72726,
+            "max": 72726
+          }
+        },
+        "htmlBlockedAnyRun": false,
+        "degradedSpecialistsUnion": []
+      }
+    },
+    {
+      "url": "https://github.com",
+      "runs": [
+        {
+          "index": 0,
+          "status": "failed",
+          "startedAt": "2026-04-19T20:37:18.799Z",
+          "finishedAt": "2026-04-19T20:39:37.489Z",
+          "totalWallClockMs": 138690,
+          "error": {
+            "kind": "synth",
+            "message": "synthesis timed out after 60000ms"
+          }
+        }
+      ],
+      "aggregates": {
+        "successfulRuns": 0,
+        "failedRuns": 1,
+        "topPriorityConsistency": {
+          "allSameId": null,
+          "allSameFeatureId": null,
+          "ids": [],
+          "featureIds": [],
+          "uniqueIdCount": 0,
+          "uniqueFeatureIdCount": 0
+        },
+        "findingsCountByCategory": {
+          "image": {
+            "min": 0,
+            "max": 0,
+            "p50": 0
+          },
+          "bundle": {
+            "min": 0,
+            "max": 0,
+            "p50": 0
+          },
+          "cache": {
+            "min": 0,
+            "max": 0,
+            "p50": 0
+          },
+          "cwv": {
+            "min": 0,
+            "max": 0,
+            "p50": 0
+          }
+        },
+        "uniqueCatalogFeatures": [],
+        "phaseTimings": {
+          "psi": {
+            "p50": 0,
+            "max": 0
+          },
+          "image": {
+            "p50": 0,
+            "max": 0
+          },
+          "bundle": {
+            "p50": 0,
+            "max": 0
+          },
+          "cache": {
+            "p50": 0,
+            "max": 0
+          },
+          "cwv": {
+            "p50": 0,
+            "max": 0
+          },
+          "specialistPhase": {
+            "p50": 0,
+            "max": 0
+          },
+          "synth": {
+            "p50": 0,
+            "max": 0
+          },
+          "total": {
+            "p50": 0,
+            "max": 0
+          }
+        },
+        "htmlBlockedAnyRun": false,
+        "degradedSpecialistsUnion": []
+      }
+    }
+  ]
+}
