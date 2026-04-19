@@ -116,3 +116,13 @@ Tradeoffs: The worst-case wall clock is the SUM of the caps (85s), not the max. 
 State: Synthesizer + pipeline + route handler + test harness in place. Typecheck clean.
 Verification state: Structural error paths validated end-to-end — gateway rate-limit on the free tier during test:pipeline exercised degraded-specialist placeholders, degraded-summary fallbacks in image.ts/bundle.ts, and PipelineError(kind: "synth") clean propagation. Happy-path end-to-end output not yet verified — requires the Vercel AI Gateway rate limit to lift or paid credits. Revisit when credits top up.
 Next: Day 3 — eval harness (scripts/eval.ts), /evals page ('use cache' + cacheTag('eval-run')), streaming + UI in /analyze.
+## Decision: Eval harness uses 60s synth timeout; API route stays at 30s
+Date: 4/19/26
+Context: Day 3 priority 1 eval harness ran initially with synthTimeoutMs=30000 (matching the API route). First URL of the golden set (hulu.com) failed 3/3 with synth timeouts at 30s; reddit.com failed on run 0 with either a timeout or schema-validation mismatch. Meanwhile Day 2's vercel.com baseline had synth p50=26s with 1/3 at the 30s cap. The pattern: large, findings-rich pages blow past 30s consistently because ReportSchema structured output scales with the number of findings × catalog-enum validation the model has to satisfy per call.
+Options considered:
+- Hold 30s for both eval and API route. Accept that half the golden set shows synth-timeout failures in the dashboard.
+- Raise only the eval harness synth timeout to 60s, matching the PSI eval-tier carve-out pattern (API route 30s, harness 60s).
+- Raise both synth timeouts globally.
+Chose: Eval harness at 60s, API route stays at 30s. scripts/eval.ts passes synthTimeoutMs=60_000 explicitly; pipeline DEFAULT_SYNTH_TIMEOUT_MS remains 30_000.
+Why: Different consumers have different latency budgets. The API route owes a user a fast failure so they can retry — 30s is aggressive-but-honest. The eval harness exists to measure output quality on real sites; a 30s ceiling means "test runs fail before they produce any signal" which defeats the point. This mirrors psiTimeoutMs=60000 passed by the harness vs 30s default for the route (see the 4/18 phase-budget decision and RunAnalysisOptions.psiTimeoutMs inline rationale).
+Tradeoffs: Eval-tier measurements are not directly comparable to API-route p95s — the harness observes a more permissive ceiling. Accepted: the eval-tier timings inform product decisions (can we live with Sonnet's variance?) rather than SLO reporting. If we later decide the route itself needs >30s, that's a separate decision driven by observed user-facing failure rates.

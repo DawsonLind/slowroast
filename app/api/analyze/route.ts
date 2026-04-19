@@ -2,12 +2,12 @@ import { NextRequest } from "next/server";
 import { z } from "zod";
 import { runAnalysis, PipelineError } from "@/lib/pipeline";
 
-// Fluid Compute Node runtime (Cache Components doesn't support Edge, and our
-// PSI/HTML fetch + Node SDKs expect Node). Route is dynamic — per-URL analysis
-// has no meaningful shared cache key at this layer. Day 3 adds use cache +
-// cacheTag at a higher layer when we want per-URL result reuse.
-export const runtime = "nodejs";
-export const dynamic = "force-dynamic";
+// Node is the default runtime (Cache Components doesn't support Edge, and our
+// PSI/HTML fetch + Node SDKs expect Node). Under `cacheComponents: true`, the
+// route is dynamic by default — anything not inside `'use cache'` runs
+// per-request, which is exactly what we want for per-URL analyses. Next.js 16
+// rejects both `export const runtime` and `export const dynamic` alongside
+// cacheComponents, so we rely on defaults and let the config drive behavior.
 // 120s covers the observed phase budget: 30s PSI + 2×40s specialists
 // (serialized by p-limit(2)) + 30s synth, with slack. Synth grew from 15s
 // to 30s after empirical measurement showed Sonnet 4.6 consistently needs

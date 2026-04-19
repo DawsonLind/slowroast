@@ -72,10 +72,34 @@ export class PipelineError extends Error {
   }
 }
 
+export interface PhaseTimings {
+  // Wall-clock milliseconds for the PSI+HTML data-fetch phase (these two run
+  // in parallel via Promise.all; the reported time is the phase duration,
+  // i.e. max of the two, not the sum).
+  psiMs: number;
+  // Per-specialist wall-clock milliseconds as observed by wrapSpecialist.
+  // Under SPECIALIST_CONCURRENCY=2 these overlap in pairs rather than all
+  // four, so imageMs + bundleMs + cacheMs + cwvMs will exceed specialistPhaseMs.
+  imageMs: number;
+  bundleMs: number;
+  cacheMs: number;
+  cwvMs: number;
+  // Wall-clock of the entire specialist phase (Promise.all on all four
+  // wrapped specialist calls). With p-limit(2) this is ≈ 2× the typical
+  // per-specialist time.
+  specialistPhaseMs: number;
+  // Wall-clock of the generateObject synth call.
+  synthMs: number;
+  // End-to-end runAnalysis wall-clock (includes tiny amounts of HTML parsing
+  // and slice extraction between phases).
+  totalMs: number;
+}
+
 export interface AnalysisResult {
   report: Report;
   degradedSpecialists: FindingCategory[];
   htmlBlocked: boolean;
+  phaseTimings: PhaseTimings;
 }
 
 export interface RunAnalysisOptions {
@@ -97,6 +121,8 @@ export async function runAnalysis(
 ): Promise<AnalysisResult> {
   throwIfAborted(opts.signal);
 
+  const totalStartedAt = Date.now();
+
   // Phase 1: deterministic data collection. PSI enforces its own 30s cap;
   // fetchHtml is 10s. Both accept AbortSignal so caller disconnects win.
   const psiStartedAt = Date.now();
@@ -115,7 +141,8 @@ export async function runAnalysis(
     }
     throw err;
   }
-  console.error(`[pipeline] psi phase ok in ${Date.now() - psiStartedAt}ms`);
+  const psiMs = Date.now() - psiStartedAt;
+  console.error(`[pipeline] psi phase ok in ${psiMs}ms`);
 
   const assets = htmlResult.html ? parseHtmlForAssets(htmlResult.html) : EMPTY_ASSETS;
   throwIfAborted(opts.signal);
@@ -129,12 +156,22 @@ export async function runAnalysis(
   const cacheSlice = extractCacheSlice(psi, htmlResult);
   const cwvSlice = extractCwvSlice(psi, htmlResult, assets);
 
-  const outputs = await Promise.all([
+  const specialistPhaseStartedAt = Date.now();
+  const wrapped = await Promise.all([
     specialistLimit(() => wrapSpecialist("image", () => runImageSpecialist(imageSlice))),
     specialistLimit(() => wrapSpecialist("bundle", () => runBundleSpecialist(bundleSlice))),
     specialistLimit(() => wrapSpecialist("cache", () => runCacheSpecialist(cacheSlice))),
     specialistLimit(() => wrapSpecialist("cwv", () => runCwvSpecialist(cwvSlice))),
   ]);
+  const specialistPhaseMs = Date.now() - specialistPhaseStartedAt;
+  const outputs = wrapped.map((w) => w.output);
+  const specialistMsByCategory: Record<FindingCategory, number> = {
+    image: 0,
+    bundle: 0,
+    cache: 0,
+    cwv: 0,
+  };
+  for (const w of wrapped) specialistMsByCategory[w.output.specialist] = w.elapsedMs;
 
   const degradedSpecialists = outputs
     .filter((o) => o.summary.startsWith(FAILURE_PREFIX))
@@ -188,7 +225,8 @@ export async function runAnalysis(
   } finally {
     clearTimeout(synthTimer);
   }
-  console.error(`[pipeline] synth phase ok in ${Date.now() - synthStartedAt}ms`);
+  const synthMs = Date.now() - synthStartedAt;
+  console.error(`[pipeline] synth phase ok in ${synthMs}ms`);
 
   const report: Report = {
     url: psi.finalUrl,
@@ -199,10 +237,22 @@ export async function runAnalysis(
     relatedFindings: synthOutput.relatedFindings,
   };
 
+  const phaseTimings: PhaseTimings = {
+    psiMs,
+    imageMs: specialistMsByCategory.image,
+    bundleMs: specialistMsByCategory.bundle,
+    cacheMs: specialistMsByCategory.cache,
+    cwvMs: specialistMsByCategory.cwv,
+    specialistPhaseMs,
+    synthMs,
+    totalMs: Date.now() - totalStartedAt,
+  };
+
   return {
     report,
     degradedSpecialists,
     htmlBlocked: htmlResult.blocked,
+    phaseTimings,
   };
 }
 
@@ -211,10 +261,17 @@ export async function runAnalysis(
 // — the synth prompt knows to skip it. We intentionally DO NOT re-throw:
 // keeping the per-lane failure local is what makes "partial failures don't
 // fail the whole report" mechanical, not advisory.
+// Also returns the observed wall clock so the caller can surface per-lane
+// timings in phaseTimings.
+interface WrappedSpecialist {
+  output: SpecialistOutput;
+  elapsedMs: number;
+}
+
 async function wrapSpecialist(
   category: FindingCategory,
   run: () => Promise<SpecialistOutput>,
-): Promise<SpecialistOutput> {
+): Promise<WrappedSpecialist> {
   let timer: ReturnType<typeof setTimeout> | null = null;
   const timeout = new Promise<never>((_, reject) => {
     timer = setTimeout(() => {
@@ -225,19 +282,24 @@ async function wrapSpecialist(
   const startedAt = Date.now();
   try {
     const result = await Promise.race([run(), timeout]);
+    const elapsedMs = Date.now() - startedAt;
     console.error(
-      `[pipeline] ${category} specialist ok in ${Date.now() - startedAt}ms`,
+      `[pipeline] ${category} specialist ok in ${elapsedMs}ms`,
     );
-    return result;
+    return { output: result, elapsedMs };
   } catch (err) {
     const reason = errorMessage(err);
+    const elapsedMs = Date.now() - startedAt;
     console.error(
-      `[pipeline] ${category} specialist failed after ${Date.now() - startedAt}ms; degrading lane: ${reason}`,
+      `[pipeline] ${category} specialist failed after ${elapsedMs}ms; degrading lane: ${reason}`,
     );
     return {
-      specialist: category,
-      findings: [],
-      summary: `${FAILURE_PREFIX} ${reason}`,
+      output: {
+        specialist: category,
+        findings: [],
+        summary: `${FAILURE_PREFIX} ${reason}`,
+      },
+      elapsedMs,
     };
   } finally {
     if (timer != null) clearTimeout(timer);
