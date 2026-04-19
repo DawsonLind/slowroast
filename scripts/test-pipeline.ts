@@ -17,7 +17,10 @@ async function main() {
   console.error(`→ analyzing ${url}`);
   const started = Date.now();
 
-  const result = await runAnalysis(url);
+  // Manual harness — pass a longer PSI cap than the API route's 30s default.
+  // PSI wall clock varies meaningfully on real sites; see fetchPsi's inline
+  // comment on the manual/eval carve-out.
+  const result = await runAnalysis(url, { psiTimeoutMs: 60_000 });
   console.error(`  pipeline finished in ${Date.now() - started}ms`);
   console.error(`  htmlBlocked=${result.htmlBlocked}`);
   if (result.degradedSpecialists.length > 0) {

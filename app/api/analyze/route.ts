@@ -8,9 +8,12 @@ import { runAnalysis, PipelineError } from "@/lib/pipeline";
 // cacheTag at a higher layer when we want per-URL result reuse.
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-// 90s matches the pitch's "~90 second" budget: 30s PSI + 40s specialists +
-// 15s synth + slack. See docs/architecture.md §2 and lib/pipeline.ts budgets.
-export const maxDuration = 90;
+// 120s covers the observed phase budget: 30s PSI + 2×40s specialists
+// (serialized by p-limit(2)) + 30s synth, with slack. Synth grew from 15s
+// to 30s after empirical measurement showed Sonnet 4.6 consistently needs
+// ~15s+ for ReportSchema structured output. See docs/architecture.md §2
+// and lib/pipeline.ts budgets.
+export const maxDuration = 120;
 
 const BodySchema = z.object({
   url: z.string().url(),

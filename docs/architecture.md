@@ -145,13 +145,15 @@ User pastes URL
  │   })                                         │
  │                                              │
  │   Plus streamText for executive summary.    │
- │   ~5-10s.                                    │
+ │   ~15-25s.                                   │
  └─────────────────────────────────────────────┘
          ↓
  Client renders final prioritized report
          ↓
  Result cached via `use cache` + `cacheTag(\`analysis-\${urlHash}\`)`
 ```
+
+**Phase budgets (hard caps in `lib/pipeline.ts`):** PSI 30s (API route) / 60s (manual + eval harness), specialists 40s per-lane (Promise.race), synth 30s. Route-level `maxDuration = 120s` (Day 2 Chunk 4). Observed wall clock against `https://vercel.com/`: p50 ≈ 75s end-to-end. Synth grew from 15s → 30s after empirical measurement showed Sonnet 4.6 consistently needs ~15s+ for `ReportSchema` structured output (up to 10 findings × 9 fields + executiveSummary prose, all under strict catalog-enum validation).
 
 ### The Design Principle: Grounded Specialists, LLM-for-Judgment
 

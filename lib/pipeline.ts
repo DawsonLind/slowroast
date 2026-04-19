@@ -1,3 +1,4 @@
+import pLimit from "p-limit";
 import { fetchPsi, PsiError } from "@/lib/psi";
 import { fetchHtml, parseHtmlForAssets, type ParsedAssets } from "@/lib/html";
 import {
@@ -18,9 +19,25 @@ import type {
 } from "@/lib/schemas";
 
 // Phase budgets. Independent hard caps — a slow PSI does NOT steal time from
-// specialists. Route-level maxDuration = 90s adds a safety net above these.
+// specialists. Route-level maxDuration = 120s adds a safety net above these.
+// Synth budget was 15s originally; 3-of-3 test:pipeline runs against
+// vercel.com showed Sonnet 4.6 blowing past 15s on the structured-output
+// synth call (executiveSummary + up to 10 findings with strict catalog-enum
+// vercelFeatureId + topPriority). 30s matches observed ceiling plus slack.
 const SPECIALIST_TIMEOUT_MS = 40_000;
-const SYNTH_TIMEOUT_MS = 15_000;
+const DEFAULT_SYNTH_TIMEOUT_MS = 30_000;
+
+// Cap concurrent specialist execution. Discovered empirically: four specialists
+// firing at once (each doing the two-call pattern — tool-loop + dedicated
+// summary) bursts past Vercel AI Gateway rate limits and 429s a subset of
+// calls. This is a pacer, not a retry layer. Architecture stays parallel
+// (Promise.all fans out all four below); p-limit just gates when each
+// specialist's callback starts executing. Trade-off: worst-case specialist
+// phase wall clock is 2 × SPECIALIST_TIMEOUT_MS instead of 1 ×, which tightens
+// margin against the 120s route cap but stays safe under typical load (p95
+// specialist was 22.7s in baseline measurement — well under 40s).
+const SPECIALIST_CONCURRENCY = 2;
+const specialistLimit = pLimit(SPECIALIST_CONCURRENCY);
 
 // Degradation marker: a specialist that timed out or threw returns this
 // sentinel summary. The synth prompt keys off the "[specialist-failed]"
@@ -63,6 +80,15 @@ export interface AnalysisResult {
 
 export interface RunAnalysisOptions {
   signal?: AbortSignal;
+  // Overrides fetchPsi's 30s default. The API route should OMIT this — a fast
+  // PSI fail is the right UX there. Manual harnesses (scripts/test-pipeline.ts,
+  // eval runs) should pass ~60s because PSI's wall clock varies meaningfully
+  // on real sites and the documented arch doc range is 10–30s.
+  psiTimeoutMs?: number;
+  // Overrides the 30s synth default. Mirrors psiTimeoutMs so eval harnesses
+  // can tighten or loosen independently of the API route. Once eval gives us
+  // p95 synth data, we may shrink this below 30s for the route specifically.
+  synthTimeoutMs?: number;
 }
 
 export async function runAnalysis(
@@ -73,18 +99,23 @@ export async function runAnalysis(
 
   // Phase 1: deterministic data collection. PSI enforces its own 30s cap;
   // fetchHtml is 10s. Both accept AbortSignal so caller disconnects win.
+  const psiStartedAt = Date.now();
   let psi, htmlResult;
   try {
     [psi, htmlResult] = await Promise.all([
-      fetchPsi(url, { signal: opts.signal }),
+      fetchPsi(url, { signal: opts.signal, timeoutMs: opts.psiTimeoutMs }),
       fetchHtml(url, { signal: opts.signal }),
     ]);
   } catch (err) {
     if (err instanceof PsiError) {
+      console.error(
+        `[pipeline] psi phase failed after ${Date.now() - psiStartedAt}ms: ${err.kind}`,
+      );
       throw new PipelineError("psi", `PSI failed (${err.kind}): ${err.message}`, err);
     }
     throw err;
   }
+  console.error(`[pipeline] psi phase ok in ${Date.now() - psiStartedAt}ms`);
 
   const assets = htmlResult.html ? parseHtmlForAssets(htmlResult.html) : EMPTY_ASSETS;
   throwIfAborted(opts.signal);
@@ -99,10 +130,10 @@ export async function runAnalysis(
   const cwvSlice = extractCwvSlice(psi, htmlResult, assets);
 
   const outputs = await Promise.all([
-    wrapSpecialist("image", () => runImageSpecialist(imageSlice)),
-    wrapSpecialist("bundle", () => runBundleSpecialist(bundleSlice)),
-    wrapSpecialist("cache", () => runCacheSpecialist(cacheSlice)),
-    wrapSpecialist("cwv", () => runCwvSpecialist(cwvSlice)),
+    specialistLimit(() => wrapSpecialist("image", () => runImageSpecialist(imageSlice))),
+    specialistLimit(() => wrapSpecialist("bundle", () => runBundleSpecialist(bundleSlice))),
+    specialistLimit(() => wrapSpecialist("cache", () => runCacheSpecialist(cacheSlice))),
+    specialistLimit(() => wrapSpecialist("cwv", () => runCwvSpecialist(cwvSlice))),
   ]);
 
   const degradedSpecialists = outputs
@@ -120,26 +151,35 @@ export async function runAnalysis(
 
   // Phase 3: synthesis. Compose caller signal with a per-phase timeout so
   // either cancels cleanly. AbortSignal.any is in Node 20+ (Vercel default).
+  const synthTimeoutMs = opts.synthTimeoutMs ?? DEFAULT_SYNTH_TIMEOUT_MS;
   const synthController = new AbortController();
-  const synthTimer = setTimeout(() => synthController.abort(), SYNTH_TIMEOUT_MS);
+  const synthTimer = setTimeout(() => synthController.abort(), synthTimeoutMs);
   const synthSignal = opts.signal
     ? AbortSignal.any([opts.signal, synthController.signal])
     : synthController.signal;
 
+  const synthStartedAt = Date.now();
   let synthOutput;
   try {
     synthOutput = await runSynth(url, outputs, { signal: synthSignal });
   } catch (err) {
+    const synthElapsed = Date.now() - synthStartedAt;
     if (synthController.signal.aborted) {
+      console.error(
+        `[pipeline] synth phase timed out after ${synthElapsed}ms (cap=${synthTimeoutMs}ms)`,
+      );
       throw new PipelineError(
         "synth",
-        `synthesis timed out after ${SYNTH_TIMEOUT_MS}ms`,
+        `synthesis timed out after ${synthTimeoutMs}ms`,
         err,
       );
     }
     if (opts.signal?.aborted) {
       throw new PipelineError("aborted", "analysis aborted by caller", err);
     }
+    console.error(
+      `[pipeline] synth phase failed after ${synthElapsed}ms: ${errorMessage(err)}`,
+    );
     throw new PipelineError(
       "synth",
       `synthesis failed: ${errorMessage(err)}`,
@@ -148,6 +188,7 @@ export async function runAnalysis(
   } finally {
     clearTimeout(synthTimer);
   }
+  console.error(`[pipeline] synth phase ok in ${Date.now() - synthStartedAt}ms`);
 
   const report: Report = {
     url: psi.finalUrl,
@@ -181,12 +222,17 @@ async function wrapSpecialist(
     }, SPECIALIST_TIMEOUT_MS);
   });
 
+  const startedAt = Date.now();
   try {
-    return await Promise.race([run(), timeout]);
+    const result = await Promise.race([run(), timeout]);
+    console.error(
+      `[pipeline] ${category} specialist ok in ${Date.now() - startedAt}ms`,
+    );
+    return result;
   } catch (err) {
     const reason = errorMessage(err);
     console.error(
-      `[pipeline] ${category} specialist failed; degrading lane: ${reason}`,
+      `[pipeline] ${category} specialist failed after ${Date.now() - startedAt}ms; degrading lane: ${reason}`,
     );
     return {
       specialist: category,
