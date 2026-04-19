@@ -7,6 +7,7 @@ import {
   type SpecialistOutput,
   type PsiAudit,
 } from "@/lib/schemas";
+import { summarizeAuditDetails } from "@/lib/audit-summary";
 import type { ImageSlice } from "@/lib/data-slice";
 import type { ImgAsset } from "@/lib/html";
 
@@ -97,9 +98,9 @@ export async function runImageSpecialist(
     },
   });
 
-  // Image-pinned lookup tool. The shared tool in shared-tools.ts accepts an
-  // optional `category` filter; we hardcode it to "image" here so the model
-  // physically cannot retrieve a non-image feature — a defense-in-depth
+  // Image-pinned lookup tool. The catalog-level lookupVercelFeature accepts
+  // an optional `category` filter; we hardcode it to "image" here so the
+  // model physically cannot retrieve a non-image feature — a defense-in-depth
   // complement to the "drop the finding if no confident match" prompt
   // constraint. Without this pin we saw SVG-sizing concerns mapping to
   // next-image-priority because the specialist's free-text concern tokens
@@ -267,28 +268,9 @@ function formatAudit(id: string, audit: PsiAudit): string {
   }
   // Include details when compact — savings hints are in there for several
   // of these audits (e.g. overallSavingsMs, items[].wastedBytes).
-  const details = summarizeDetails(audit.details);
+  const details = summarizeAuditDetails(audit.details);
   if (details) parts.push(`details=${details}`);
   return parts.join(" ");
-}
-
-function summarizeDetails(details: unknown): string | null {
-  if (!details || typeof details !== "object") return null;
-  const obj = details as Record<string, unknown>;
-  const pick: Record<string, unknown> = {};
-  for (const key of [
-    "overallSavingsMs",
-    "overallSavingsBytes",
-    "type",
-  ]) {
-    if (key in obj) pick[key] = obj[key];
-  }
-  if (Array.isArray(obj.items)) {
-    // Only keep the first few items to cap tokens.
-    pick.items = obj.items.slice(0, 5);
-  }
-  const compact = JSON.stringify(pick);
-  return compact.length > 1500 ? truncate(compact, 1500) : compact;
 }
 
 function formatImage(img: ImgAsset): string {

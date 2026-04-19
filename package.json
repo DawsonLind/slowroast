@@ -8,7 +8,11 @@
     "start": "next start",
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
-    "test:image": "tsx --env-file=.env.local scripts/test-image-specialist.ts"
+    "test:image": "tsx --env-file=.env.local scripts/test-image-specialist.ts",
+    "test:cache": "tsx --env-file=.env.local scripts/test-cache-specialist.ts",
+    "test:bundle": "tsx --env-file=.env.local scripts/test-bundle-specialist.ts",
+    "test:cwv": "tsx --env-file=.env.local scripts/test-cwv-specialist.ts",
+    "test:pipeline": "tsx --env-file=.env.local scripts/test-pipeline.ts"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^3.0.71",
