@@ -46,7 +46,10 @@ export const ReportSchema = z.object({
   url: z.string().url(),
   generatedAt: z.string().datetime(),
   executiveSummary: z.string(),
-  topPriority: FindingSchema,
+  // Optional: a well-cached well-built site can legitimately produce zero
+  // findings. The synthesizer emits topPriority only when `findings` is
+  // non-empty; downstream UI renders a "no issues found" branch otherwise.
+  topPriority: FindingSchema.optional(),
   findings: z.array(FindingSchema),
   // Evidence from multiple specialists merged into one finding during synthesis.
   relatedFindings: z.record(z.string(), z.array(FindingSchema)).optional(),
