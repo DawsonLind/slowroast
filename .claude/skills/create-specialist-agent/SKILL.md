@@ -23,51 +23,54 @@ You are creating a new specialist `ToolLoopAgent` in `lib/agents/$1.ts`. This pr
 ## Structure (do not deviate)
 
 ```ts
-import { ToolLoopAgent, tool, stepCountIs } from "ai";
+import { ToolLoopAgent, tool, stepCountIs, Output } from "ai";
 import { gateway } from "@ai-sdk/gateway";
 import { z } from "zod";
-import { lookupVercelFeature } from "./shared-tools";
-import type { SpecialistInput, SpecialistOutput } from "@/lib/schemas";
+import { lookupVercelFeatureTool } from "./shared-tools";
+import { SpecialistOutputSchema, type SpecialistOutput } from "@/lib/schemas";
+import type { XSlice } from "@/lib/data-slice";  // per-specialist slice type
 
-const SYSTEM_PROMPT = `You analyze [domain] performance...`;  // ~30-50 lines
+const INSTRUCTIONS = `You analyze [domain] performance...`;  // ~30-50 lines
 
-// Domain-specific tools. 1-2 max. Always include lookup_vercel_feature.
-const getXContext = tool({
-  description: "...",
-  inputSchema: z.object({ /* ... */ }),
-  execute: async (input) => { /* ... */ },
-});
+// Per-call factory: tools that need to close over this URL's data must be
+// constructed inside runXSpecialist, not at module scope. The shared catalog
+// lookup stays a singleton because the catalog is static.
+export async function runXSpecialist(slice: XSlice): Promise<SpecialistOutput> {
+  const getXContext = tool({
+    description: "...",
+    inputSchema: z.object({ /* ... */ }),
+    execute: async (input) => { /* closes over `slice` */ },
+  });
 
-export const $1Agent = new ToolLoopAgent({
-  model: gateway("anthropic/claude-haiku-4.5"),  // Haiku for specialists — cost/latency
-  system: SYSTEM_PROMPT,
-  tools: {
-    get_x_context: getXContext,
-    lookup_vercel_feature: lookupVercelFeature,
-  },
-  stopWhen: stepCountIs(6),  // bounded loop
-  providerOptions: {
-    gateway: { order: ["anthropic", "openai"] },  // fallback
-  },
-});
+  const agent = new ToolLoopAgent({
+    model: gateway("anthropic/claude-haiku-4.5"),  // Haiku for specialists — cost/latency
+    instructions: INSTRUCTIONS,                    // AI SDK 6 field name (NOT `system`)
+    tools: {
+      get_x_context: getXContext,
+      lookup_vercel_feature: lookupVercelFeatureTool,
+    },
+    stopWhen: stepCountIs(6),                      // bounded loop
+    output: Output.object({ schema: SpecialistOutputSchema }),  // typed, Zod-validated
+    providerOptions: {
+      gateway: { order: ["anthropic", "openai"] },
+    },
+  });
 
-export async function run$1Specialist(input: SpecialistInput): Promise<SpecialistOutput> {
-  const result = await $1Agent.generate({ prompt: buildPrompt(input) });
-  return parseSpecialistOutput(result);  // validate against schema
+  const result = await agent.generate({ prompt: buildPrompt(slice) });
+  return result.output;  // already typed + validated via Output.object
 }
 
-function buildPrompt(input: SpecialistInput): string { /* ... */ }
-function parseSpecialistOutput(result: unknown): SpecialistOutput { /* ... */ }
+function buildPrompt(slice: XSlice): string { /* structured summary of the slice */ }
 ```
 
 ## Checklist before you're done
 
-- [ ] System prompt has three sections: role, process, constraints (see architecture doc §12 for the image specialist's prompt as reference).
+- [ ] Instructions have three sections: role, process, constraints (see architecture doc §12 for the image specialist's prompt as reference).
 - [ ] Every tool has a Zod `inputSchema` with descriptions (the model reads these).
 - [ ] `stopWhen` is bounded (default `stepCountIs(6)`).
 - [ ] Model string uses Gateway format: `anthropic/claude-haiku-4.5`.
-- [ ] Output is parsed and validated against the specialist output schema in `lib/schemas.ts`.
-- [ ] Every finding the specialist produces has a `vercelFeatureId` that will resolve via `lookupVercelFeature`.
+- [ ] Output uses `Output.object({ schema: SpecialistOutputSchema })` so `result.output` is Zod-validated.
+- [ ] Every finding the specialist produces has a `vercelFeatureId` that will resolve via `lookupVercelFeatureTool`.
 - [ ] The specialist is wired into `app/api/analyze/route.ts` via `Promise.all`.
 - [ ] A new test entry is added to `evals/golden/*.json` covering this specialist's domain (if not already covered).
 

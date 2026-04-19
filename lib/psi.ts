@@ -16,6 +16,10 @@ export type PsiStrategy = "mobile" | "desktop";
 export interface FetchPsiOptions {
   strategy?: PsiStrategy;
   signal?: AbortSignal;
+  // Override the 30s default. The API route should keep the default to fail
+  // fast; manual/eval harnesses may want a longer cap since PSI's run-time
+  // varies meaningfully under real-world load.
+  timeoutMs?: number;
 }
 
 export type PsiErrorKind =
@@ -57,10 +61,11 @@ export async function fetchPsi(
   endpoint.searchParams.set("strategy", strategy);
   endpoint.searchParams.set("category", "performance");
 
+  const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const controller = new AbortController();
   const timeout = setTimeout(
-    () => controller.abort(new PsiError("timeout", `PSI timed out after ${DEFAULT_TIMEOUT_MS}ms`)),
-    DEFAULT_TIMEOUT_MS,
+    () => controller.abort(new PsiError("timeout", `PSI timed out after ${timeoutMs}ms`)),
+    timeoutMs,
   );
   // Thread the caller's AbortSignal through so route-level cancellation wins.
   opts.signal?.addEventListener("abort", () => controller.abort(opts.signal?.reason), {
