@@ -15,7 +15,7 @@ const jetbrainsMono = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Slowroast — multi-agent web perf analyzer",
+  title: "Slowroast - multi-agent web perf analyzer",
   description:
     "Paste a URL. Four specialist agents fan out in parallel, then a synthesizer ranks their findings by impact × ease. Every recommendation grounded in a curated Vercel feature catalog.",
 };

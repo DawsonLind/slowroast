@@ -23,7 +23,7 @@ export default function GlobalError({
       </h1>
       <p className="max-w-md text-sm text-muted-foreground">
         An unexpected error reached the page boundary. The analyzer itself has
-        its own error panel — this fires only if a render threw.
+        its own error panel - this fires only if a render threw.
       </p>
       {error.digest ? (
         <code className="rounded bg-muted px-2 py-1 font-mono text-xs text-muted-foreground">

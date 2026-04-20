@@ -586,7 +586,7 @@ function IdlePanel() {
           parallel, fan out to four specialist{" "}
           <code className="font-mono text-foreground/80">ToolLoopAgent</code>s
           (image, bundle, cache, CWV), then a Sonnet synthesizer ranks their
-          findings by impact × ease — every recommendation grounded in a
+          findings by impact × ease - every recommendation grounded in a
           curated Vercel feature catalog.
         </p>
         <p className="text-xs">
@@ -599,15 +599,15 @@ function IdlePanel() {
 
 const ERROR_HINTS: Record<string, string> = {
   psi:
-    "Upstream PageSpeed Insights call failed. Try again in a moment, or try a different URL — rate limits and transient 5xx are both common.",
+    "Upstream PageSpeed Insights call failed. Try again in a moment, or try a different URL - rate limits and transient 5xx are both common.",
   synth:
     "The synthesizer exceeded its budget or produced output that didn't validate. Retrying often works; Sonnet has real variance on structured output under the catalog-enum constraint.",
   all_specialists_failed:
-    "All four specialists failed — most commonly a Gateway rate-limit spike. Retrying in a few seconds usually resolves this.",
+    "All four specialists failed - most commonly a Gateway rate-limit spike. Retrying in a few seconds usually resolves this.",
   invalid_body:
     "The URL didn't pass validation. Make sure it starts with https:// and is well-formed.",
   invalid_result:
-    "Server returned a response that didn't match the expected shape. Usually transient — retry.",
+    "Server returned a response that didn't match the expected shape. Usually transient - retry.",
   network:
     "The browser couldn't reach the server. Check your connection and retry.",
   aborted: "Request was cancelled.",
@@ -683,7 +683,7 @@ function ReportBanners({
                 .map((s) => SPECIALIST_META[s].shortLabel)
                 .join(", ")}
             </span>
-            . Those lanes failed or partially completed — see their card for
+            . Those lanes failed or partially completed - see their card for
             status.
           </p>
         ) : null}

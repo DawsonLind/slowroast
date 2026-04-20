@@ -6,7 +6,7 @@ export default function NotFound() {
   return (
     <div className="flex min-h-full flex-col items-center justify-center gap-4 bg-background px-6 py-16 text-center text-foreground">
       <h1 className="font-heading text-2xl font-semibold tracking-tight">
-        404 — not found
+        404 - not found
       </h1>
       <p className="max-w-md text-sm text-muted-foreground">
         Slowroast only exposes two routes:{" "}

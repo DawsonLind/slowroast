@@ -114,7 +114,7 @@ function FindingBody({ finding }: { finding: Finding }) {
         </div>
       ) : (
         <div className="rounded-lg border border-destructive/40 bg-destructive/5 p-3 text-xs text-destructive">
-          Unknown feature id <code>{finding.vercelFeatureId}</code> — not in
+          Unknown feature id <code>{finding.vercelFeatureId}</code> - not in
           catalog. This should not be possible if the synth schema was enforced.
         </div>
       )}

@@ -238,7 +238,7 @@ function SynthErrorBack({
       <CardContent className="flex flex-col gap-3">
         <p className="text-sm leading-relaxed text-foreground/90">
           Sonnet produced output that didn&apos;t validate against the schema,
-          or the call timed out. Specialist findings are still available — see
+          or the call timed out. Specialist findings are still available - see
           the lanes below.
         </p>
         {errorKind ? (

@@ -254,7 +254,7 @@ function IdleFooter() {
   return (
     <div className="flex items-center justify-between text-[11px] text-muted-foreground">
       <span>Awaiting URL</span>
-      <span className="font-mono opacity-60">—</span>
+      <span className="font-mono opacity-60">-</span>
     </div>
   );
 }
@@ -263,7 +263,7 @@ function QueuedFooter() {
   return (
     <div className="flex items-center justify-between text-[11px] text-muted-foreground">
       <span>Waiting for open slot…</span>
-      <span className="font-mono opacity-60">—</span>
+      <span className="font-mono opacity-60">-</span>
     </div>
   );
 }
@@ -327,7 +327,7 @@ function DoneFooter({
 function ErrorFooter() {
   return (
     <div className="text-[11px] text-muted-foreground">
-      Specialist degraded — see banner above.
+      Specialist degraded - see banner above.
     </div>
   );
 }

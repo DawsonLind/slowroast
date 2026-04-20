@@ -181,7 +181,7 @@ export default async function EvalsPage() {
           <p className="max-w-3xl text-sm leading-relaxed text-muted-foreground">
             Seven hand-picked URLs × three runs each, end-to-end through the
             real pipeline. Each run measures per-phase wall clock, finding
-            counts per specialist category, and top-priority stability — three
+            counts per specialist category, and top-priority stability - three
             runs catch nondeterministic drift the single-run smoke test
             can&apos;t. Sequential URL execution is intentional: the specialist
             fan-out is already p-limit(2), so parallel URLs re-trigger the
@@ -344,7 +344,7 @@ function ResultsContent({ results }: { results: ResultsFile }) {
           <p className="pt-3 text-xs text-muted-foreground">
             Harness timeouts: PSI {fmtS(meta.psiTimeoutMs)} · synth{" "}
             {fmtS(meta.synthTimeoutMs)} (eval-tier; the API route uses a
-            tighter 30s synth cap — see decisions log).
+            tighter 30s synth cap - see decisions log).
           </p>
         </CardContent>
       </Card>
@@ -416,7 +416,7 @@ function UrlRow({ record }: { record: UrlRecord }) {
         <div className="flex flex-wrap items-center gap-2 text-xs">
           <span
             className={cn("rounded-full px-2 py-0.5", stability.cls)}
-            title="Top-priority stability across runs — whether the synth flagged the same top issue each time"
+            title="Top-priority stability across runs - whether the synth flagged the same top issue each time"
           >
             {stability.label}
           </span>
@@ -485,7 +485,7 @@ function RunTopPriorityTable({
                 {id ?? "(none)"}
               </td>
               <td className="py-1 font-mono truncate max-w-[200px]" title={featureIds[i] ?? ""}>
-                {featureIds[i] ?? "—"}
+                {featureIds[i] ?? "-"}
               </td>
             </tr>
           ))}
@@ -726,7 +726,7 @@ function hostFor(url: string): string {
 }
 
 function fmtS(ms: number): string {
-  if (ms === 0) return "—";
+  if (ms === 0) return "-";
   if (ms < 1000) return `${ms}ms`;
   return `${(ms / 1000).toFixed(1)}s`;
 }
