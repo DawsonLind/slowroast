@@ -22,7 +22,7 @@ Slowroast replaces that day with 90 seconds. A customer pastes a URL and gets a 
            ▼
   ┌────────────────────────────────────────────┐
   │ Phase 1 — Deterministic data collection    │
-  │   Promise.all([ fetchPSI, fetchHtml ])     │  ~5–15s
+  │   Promise.all([ fetchPSI, fetchHtml ])     │  ~15–45s
   │   No LLM. Facts only.                      │
   └────────────────────────────────────────────┘
            │
@@ -32,7 +32,7 @@ Slowroast replaces that day with 90 seconds. A customer pastes a URL and gets a 
   │                                            │
   │   Promise.all([                            │
   │     imageAgent.generate(),   ─┐            │
-  │     bundleAgent.generate(),   │  Haiku 4.5 │  ~10–25s
+  │     bundleAgent.generate(),   │  Haiku 4.5 │  ~15–25s
   │     cacheAgent.generate(),    │  ToolLoop  │
   │     cwvAgent.generate(),    ─┘             │
   │   ])                                       │
@@ -45,10 +45,12 @@ Slowroast replaces that day with 90 seconds. A customer pastes a URL and gets a 
   ┌────────────────────────────────────────────┐
   │ Phase 3 — Synthesis                        │
   │   generateObject({                         │
-  │     model: sonnet-4.6,                     │  ~15–25s
+  │     model: sonnet-4.6,                     │  ~30–70s
   │     schema: ReportSchema,                  │
   │   })                                       │
   │   Dedupe, prioritize by impact × ease.     │
+  │   Stamps a Slowroast score + letter grade  │
+  │   on the report (curved from raw PSI).     │
   └────────────────────────────────────────────┘
            │
            ▼
@@ -62,8 +64,10 @@ Slowroast replaces that day with 90 seconds. A customer pastes a URL and gets a 
 - **No orchestrator agent.** Parallelism is `Promise.all` in the route handler. A meta-agent for routing would add a token tax for logic vanilla code handles better — and would serialize what should be parallel.
 - **Haiku 4.5 on specialists, Sonnet 4.6 on synthesis.** Specialists are narrow (one category, 2–3 tools); Haiku handles that cheaply and fast. Synthesis is judgment across four lanes — Sonnet earns its cost there.
 - **Facts from data, recommendations from a catalog, judgment from LLMs.** The catalog in `lib/vercel-features.ts` is the "no hallucinated recommendations" guarantee. Each specialist's `lookup_vercel_feature` tool is physically scoped to its category at construction time, so a cross-category mis-recommendation is impossible — not prompted against, but structurally prevented.
-- **Independent per-phase timeout budgets.** PSI = 30s, specialists = 40s, synth = 15s. A slow PSI causes a clean 502, not a silent downstream failure.
+- **Independent per-phase timeout budgets.** PSI = 60s, specialists = 40s, synth = 90s (rebased after the 7-URL eval measured a synth p95 of 70s). A slow PSI causes a clean 502, not a silent downstream failure.
 - **Graceful degradation.** A specialist crash becomes a `[specialist-failed]` marker in synth input; the synthesizer still names the lane in the executive summary. A zero-findings report is a valid product state — `topPriority` is optional in the schema.
+- **Streamed progress, not a fake ticker.** The route emits NDJSON lifecycle events (`phase`, `specialist`, `synth`, `result`) as real work happens; the client consumes the stream and drives per-lane UI state from actual timestamps. While PSI is in flight a dedicated loading card fronts the specialist grid and unmounts the moment PSI completes.
+- **Slowroast score.** Raw PageSpeed Insights is strict by design — 70/100 feels harsh to non-specialists. A deterministic `sqrt(psi/100) * 100` curve in `lib/scoring.ts` produces a gentler headline score + A+/A/B/C/D/F grade; raw PSI stays visible as a transparency footnote. Specialists still reason on raw PSI; the curve is presentation-only.
 
 ---
 
@@ -173,6 +177,8 @@ lib/
     cwv.ts              # Core Web Vitals specialist
   synth.ts              # generateObject synthesizer
   pipeline.ts           # Phase orchestration + timeouts + degraded-lane handling
+  scoring.ts            # Raw PSI → curved Slowroast score + letter grade
+  progress-events.ts    # Zod schema for NDJSON lifecycle events to the client
   schemas.ts            # Zod everywhere
 scripts/
   eval.ts               # 7-URL golden-set harness

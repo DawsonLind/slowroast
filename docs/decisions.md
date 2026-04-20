@@ -10,140 +10,134 @@ Why: i didn't want to waste the findings of the initial haiku call and i wanted 
 Tradeoffs: with the second haiku call approach, there is a chance that the inital call fails then the second call is simply wasted tokens.this is necessary waste as it is the only way to keep the catagories consistent for the sonnet synthizing step.
 
 ## Decision: Specialist-scoped lookup tools vs shared tool
-Context: During image specialist testing, findings consistently resolved to
-features outside the image category (e.g., SVG sizing → next-image-priority).
+Context: image specialist kept resolving findings to features outside its category, e.g. an svg sizing issue mapping to next-image-priority
 Options considered:
-- Keep shared tool, rely on prompt constraints to keep model in-category
-- Keep shared tool, add category filter post-hoc
-- Inline per-specialist tools with category hardcoded at construction
-Chose: Inline per-specialist tools.
-Why: Removes an entire class of model-behavior bugs by making the wrong
-choice physically impossible. The category is deterministic per specialist
-— there's no reason to let the model vary it. Prompt constraints are advisory;
-code constraints are enforced.
-Tradeoffs: Slight code duplication across specialists. Mitigated by either
-converting shared-tools.ts into a factory on Chunk 2, or accepting 4 similar
-inline definitions.
+- keep the shared tool and rely on the prompt to keep it in-category
+- keep shared, add a post-hoc filter
+- inline per-specialist tool with the category hardcoded
+Chose: per-specialist tools, category hardcoded at construction
+Why: the category is deterministic per lane, no point letting the model pick it. prompts are a suggestion, code isnt.
+Tradeoffs: some duplication across the four files. can factor into a factory later if it starts to hurt
 
 ## End of Day 2 Chunk 1 — 4/18/26 8:46 PM
 
-State: Image specialist working end-to-end. Two-call pattern (findings + summary)
-on Haiku, catalog-scoped lookup tool, SVG false-positive fix, graceful summary
-fallback, prompt constraints aligned between PROCESS and CONSTRAINTS.
+State: image specialist working end to end. two haiku calls (findings + summary), catalog-scoped lookup tool, svg false-positive fixed, prompt constraints lined up between PROCESS and CONSTRAINTS.
 
 Known edge cases:
-- Nondeterminism on borderline findings (expected LLM variance)
-- Eval-time verification of feature-concern semantic match deferred to Day 3
+- nondeterminism on borderline findings (expected llm variance)
+- semantic feature-concern match check deferred to day 3 eval
 
-Next: Chunk 2 — bundle, cache, CWV specialists following image.ts as reference.
+Next: chunk 2 - bundle cache cwv specialists using image.ts as the reference.
 
 ## Decision: Carry Chunk 1's two-call pattern into bundle/cache/cwv from the start
 Date: 4/18/26
-Context: Chunk 1 discovered the two-call pattern (findings in a tool-loop call + summary in a dedicated generateText call) because Haiku's working memory couldn't reliably co-emit both. Chunk 2 built three more specialists; we had a choice to either re-derive the pattern from scratch or clone the proven shape.
+Context: chunk 1 landed on the two-call pattern (tool-loop findings + dedicated summary call) because haiku's working memory couldnt do both together. question for chunk 2 was whether to rediscover it per specialist or just clone
 Options considered:
-- Treat each specialist as a clean slate and see if Haiku behaves differently in the bundle/cache/cwv domains
-- Clone the image specialist's structural shape (narrow model output schema, separate summary call, try/catch fallback) from the start
-Chose: Clone the proven shape. Every new specialist has the same file structure: narrow ModelOutputSchema with just findings, dedicated generateSummary helper, degraded-summary fallback in the run{X}Specialist wrapper, instructions split into ROLE/PROCESS/CONSTRAINTS.
-Why: The working-memory issue is a property of the model (Haiku), not the domain. Re-discovering it per specialist would burn eval cycles and leave the codebase inconsistent. Uniformity also makes the future refactor target obvious if we ever want to abstract a shared runSpecialist factory.
-Tradeoffs: Four near-identical file skeletons. Accepted for now — Rule of Three hasn't bitten hard enough to justify an abstraction, and the per-specialist prompts + tools differ enough that premature extraction would hide the interesting parts.
+- treat each specialist as a clean slate
+- clone image.ts shape from the start
+Chose: clone. every new specialist ends up with the same skeleton - narrow ModelOutputSchema for findings only, separate generateSummary helper, degraded fallback, prompt split into ROLE/PROCESS/CONSTRAINTS
+Why: the memory thing is a model property not a domain one. no point finding it three more times
+Tradeoffs: four near-identical file skeletons. rule of three hasnt really bitten yet, the per-specialist prompts + tools differ enough that extracting too early would hide the interesting parts
 
 ## Decision: CWV specialist as a scope-boundary enforcer, not a catch-all
 Date: 4/18/26
-Context: The CWV catalog has only two features (font-optimization, partial-prerendering), but Core Web Vitals signal is the broadest of all four domains — nearly every perf issue shows up as an LCP/CLS/INP/TBT regression somewhere. Without guardrails the CWV specialist would be tempted to attribute image-byte-driven LCP to an image feature, or JS-heavy INP to a bundle feature, producing cross-category findings that violate the one-specialist-per-category assumption the synthesizer depends on.
+Context: the cwv catalog only has two features (font-optimization, partial-prerendering) but cwv signal is the broadest of the four - LCP/CLS/INP show up as the symptom for image or bundle root causes all the time. without guardrails cwv would happily attribute image-byte-driven LCP to an image feature, which breaks the one-specialist-per-category assumption the synth leans on
 Options considered:
-- Allow CWV to reach into other categories' catalog subsets when the root cause points there
-- Restrict CWV to its two catalog features; when the root cause lives elsewhere, describe it in the prose summary and let the responsible specialist pick it up
-- Expand the CWV catalog subset to include image/bundle/cache features for "CWV-relevant" cases
-Chose: Restrict CWV to its two features. The scope boundary is stated explicitly in the specialist's CONSTRAINTS and enforced structurally by the CWV-pinned lookup tool (category hardcoded to "cwv"). When the CWV specialist sees image-driven LCP or JS-driven INP, it emits zero findings and names the responsible lane in its summary. A sparse findings array is the CORRECT shape, not a gap.
-Why: Sonnet synthesis is far better at merging evidence across specialists than it is at resolving cross-category findings from a single specialist. The scope boundary also keeps each specialist's reasoning locally coherent — the CWV prompt is ~25% the cognitive load of a version that had to reason about which specialist owns which fix.
-Tradeoffs: CWV often produces zero findings — counterintuitive for a specialist. Addressed by a prominent SCOPE BOUNDARY constraint in the prompt AND by a scope-boundary check in the test harness that flags any finding that escapes the CWV subset.
+- let cwv reach into other catalogs when the root cause points elsewhere
+- restrict cwv to its two features, let the responsible specialist handle the rest
+- expand the cwv catalog subset
+Chose: restrict. scope boundary is stated in CONSTRAINTS and enforced by the lookup tool pinning category="cwv". when cwv sees image-driven LCP it returns zero findings and names the responsible lane in its summary. sparse findings is the correct shape not a gap
+Why: sonnet is way better at merging across specialists than a single specialist is at resolving cross-category attribution. also keeps the cwv prompt way smaller
+Tradeoffs: cwv often produces zero findings which is counterintuitive. theres a scope-boundary callout in the prompt and the test harness flags any escape
 
 ## Decision: Extract summarizeAuditDetails to lib/audit-summary.ts at Rule of Three
 Date: 4/18/26
-Context: image.ts originally inlined a summarizeDetails helper that projected Lighthouse audit details (overallSavingsMs, overallSavingsBytes, type, items-sliced-to-5) into a char-capped JSON string. When building cache.ts and cwv.ts, both needed the same projection shape — cache for header-dense audits, cwv for multi-audit diagnostic returns.
+Context: image.ts had an inline helper that flattened lighthouse audit details (overallSavingsMs, overallSavingsBytes, type, items sliced) into a char-capped json string. cache and cwv both needed the same projection
 Options considered:
-- Leave the helper inline in image.ts and copy it into cache.ts and cwv.ts
-- Extract to a shared lib/audit-summary.ts with an opts object for itemCap/charCap
-- Build a richer "audit projection" module that tries to handle all Lighthouse detail variants
-Chose: Extract to lib/audit-summary.ts during the cache specialist build, refactor image.ts to consume it in the same step, and use it from cwv.ts's diagnostic tool (with a tighter 1200-char cap for multi-audit returns).
-Why: Rule of Three — the second caller proved the projection shape was stable; the third caller made extraction pay for itself in reduced drift. Option shape (itemCap/charCap) keeps the helper honest about its tunables without over-generalizing.
-Tradeoffs: Two new files to maintain (lib/audit-summary.ts + its usage sites), but each specialist's file is smaller and behaviorally identical. Image-specialist behavior parity was verified by re-running test:image post-refactor.
+- leave inline, copy into cache and cwv
+- extract with itemCap/charCap opts
+- build a richer projection module covering every lighthouse detail variant
+Chose: extract to lib/audit-summary.ts during the cache build, refactor image.ts to use it at the same time. cwv uses it with a tighter 1200-char cap for its multi-audit diagnostic tool
+Why: second caller proved the shape was stable, third made it pay off
+Tradeoffs: one more file. image parity verified by re-running test:image after
 
 ## Decision: Partial specialist failures become summary-prefix markers, not schema errors
 Date: 4/18/26
-Context: Chunk 3's pipeline needs to survive a specialist crashing (model gateway rate-limit, schema validation miss, timeout) without dropping the whole report. The question was how to represent a degraded lane in the data that flows to the synthesizer.
+Context: the pipeline needs to survive one specialist crashing (gateway 429, schema miss, timeout) without dropping the whole report. question was how to encode the degraded lane in the data flowing to the synth
 Options considered:
-- Extend SpecialistOutputSchema with an optional `error?: string` field; every consumer learns the new field.
-- Filter failed specialists out of the synth input entirely; synth never knows there were four and can't name the skipped lane in executiveSummary.
-- Return a placeholder SpecialistOutput whose `summary` starts with "[specialist-failed] ..." and `findings: []`; the synth prompt keys off the prefix and excludes the lane while still able to mention it.
-Chose: The summary-prefix marker. Pipeline wraps each specialist call in wrapSpecialist() which catches all errors and returns the placeholder. The route response ALSO carries a sibling `degradedSpecialists: FindingCategory[]` (stamped in code, not model-emitted) so the UI can show a banner without parsing prose.
-Why: Keeps SpecialistOutputSchema pure — the existing four specialist files and their tests don't change. The marker shape reuses the exact same pattern image.ts already uses for degraded-summary fallback, so there's one conceptual idiom for "lane succeeded but with reduced output." Filtering was rejected because executiveSummary losing the ability to name the skipped lane degrades the user-facing narrative.
-Tradeoffs: The prefix is a string convention rather than a type-system boundary — drift between the producer (wrapSpecialist) and the consumer (synth prompt) is possible. Mitigated by a single FAILURE_PREFIX constant in pipeline.ts and an explicit rule in the synth INSTRUCTIONS.
+- add optional error field to SpecialistOutputSchema
+- filter the failed lane out entirely (synth doesnt know it existed)
+- placeholder output whose summary starts "[specialist-failed] ..." and findings is []
+Chose: the prefix marker. wrapSpecialist() catches and returns the placeholder. the route also returns degradedSpecialists: FindingCategory[] alongside so the UI can render a banner without parsing prose
+Why: keeps SpecialistOutputSchema unchanged - the four specialist files and their tests dont move. the prefix idiom is already what image.ts uses for its degraded-summary fallback, so one pattern not two. filtering was rejected because exec summary losing the ability to name the skipped lane is a real user-facing regression
+Tradeoffs: its a string convention not a type boundary. one FAILURE_PREFIX constant + an explicit rule in the synth prompt keep producer and consumer in sync
 
 ## Decision: ReportSchema.topPriority is optional
 Date: 4/18/26
-Context: A well-configured site can legitimately produce zero findings across all four specialists. The original ReportSchema required topPriority, which would force generateObject to fabricate one — exactly the hallucination we're trying to prevent.
+Context: a well-built site can legitimately produce zero findings across all four specialists. original schema required topPriority, which would force generateObject to fabricate one
 Options considered:
-- Keep topPriority required; when findings[] is empty, invent a synthetic "no issues found" finding.
-- Make topPriority optional; emit it only when findings[] is non-empty.
-- Short-circuit around the synth when all specialists return zero findings, skip generateObject entirely.
-Chose: Make topPriority optional. The synth prompt explicitly instructs "If findings[] is empty, omit topPriority — do not fabricate one." The downstream UI renders a "no issues found" branch.
-Why: A zero-findings report is a real, valid product state (the eval golden set even includes a case for it). Forcing a synthetic topPriority would violate the "facts from data, judgment from LLM, no inventions" architecture principle from §2. Short-circuiting the synth is an optimization we can add later — the prose summary from Sonnet is still valuable even with zero findings.
-Tradeoffs: Consumers of ReportSchema.topPriority need to handle the optional case. Acceptable — it's the right shape.
+- keep required, invent a synthetic "no issues" finding when empty
+- make optional, emit only when findings is non-empty
+- short circuit around the synth entirely when everything returns zero
+Chose: optional. synth prompt says "if findings is empty, omit topPriority - do not fabricate one." UI has a no-issues branch
+Why: zero findings is a real valid product state (the golden set even has one). forcing a synthetic top priority is exactly the hallucination the whole design is built to avoid
+Tradeoffs: consumers of topPriority have to handle the optional. fine - thats the right shape
 
 ## Decision: Synthesizer is generateObject only; streamText deferred to Day 3
 Date: 4/18/26
-Context: docs/architecture.md §4 originally described the synthesizer as "generateObject PLUS streamText for executive summary." Chunk 3 has no client UI yet — nothing is listening to a stream — and the ReportSchema already carries executiveSummary inside the structured object.
+Context: architecture doc §4 described the synth as "generateObject PLUS streamText for executive summary." chunk 3 has no UI yet so nothing would consume the stream
 Options considered:
-- Run both calls now: generateObject for structure + streamText for prose. Scaffold streaming infra for Day 3.
-- Run only generateObject; executiveSummary lives inside the report for v1; add streamText on Day 3 when the UI lands and the UX decision (parallel stream vs structured-only) can be made with real screens.
-- Skip generateObject entirely; synth in a tool-loop agent. Rejected — the synth has no tools, all facts are in the prompt.
-Chose: generateObject only for Chunk 3. executiveSummary is a field in the structured output. Day 3 will decide whether to move it out into a parallel streamText call based on how the UI wants to render it.
-Why: streamText with no client consumer is wasted machinery — either a third round-trip against already-synthesized data, or duplicate tokens. The architecture doc's "generateObject + streamText" wording is a design intent; the actual streamText call is a Day 3 concern when tokens-per-second matters. Writing it now would either be deleted or refactored on Day 3.
-Tradeoffs: executiveSummary lands all-at-once (non-streaming) for now. Fine for Chunk 3's API-only surface; the UI work will redesign the streaming topology anyway.
+- run both now, scaffold streaming infra for day 3
+- generateObject only, executiveSummary lives inside the structured object, decide about streamText on day 3
+- skip generateObject, do the synth in a tool-loop agent (rejected, synth has no tools)
+Chose: generateObject only. executiveSummary is a field in the structured output for now
+Why: streamText with no client is either a wasted third round-trip or duplicate tokens. day 3 can decide when theres a real UI to design against
+Tradeoffs: exec summary lands all at once, no streaming. fine for an api-only surface
 
 ## Decision: Independent per-phase timeout budgets with the 40s/15s pair
 Date: 4/18/26
-Context: Chunk 3 needs to guarantee the ~90s pitch under worst-case behavior. PSI self-caps at 30s; specialists and synth needed caps. The question was whether to use cumulative or independent budgets.
+Context: chunk 3 has to hold the ~90s pitch under worst case. PSI self-caps at 30s. specialists and synth needed their own caps and the question was whether to give them independent budgets or a shared pool
 Options considered:
-- Cumulative: total 90s wall clock, phases share leftover time (slow PSI eats specialist budget).
-- Independent: each phase has its own hard cap, summing to ≤ 90s total. Failure surfaces immediately when a phase overruns.
-Chose: Independent phase caps. PSI=30s (existing), specialists=40s (Promise.race per-specialist), synth=15s (AbortSignal via AbortSignal.any composing caller + timer). Total 85s + 5s slack under the route's maxDuration=90s.
-Why: Matches the user-stated "fail-fast UX" requirement. A slow PSI does not silently rob specialists of their budget and cause a less-obvious downstream failure — it causes a clean 502 with `PsiError.kind: "timeout"` in the response body. Independent budgets also keep the failure taxonomy readable when debugging a timed-out run.
-Tradeoffs: The worst-case wall clock is the SUM of the caps (85s), not the max. If PSI takes its full 30s, we still have 40+15s for downstream — we don't claw back the difference for a faster overall response. Accepted for Chunk 3; could revisit if we observe PSI consistently completing well under 30s and specialists need more headroom.
+- cumulative 90s pool, slow PSI eats into specialist budget
+- independent per-phase caps summing to <= 90s total
+Chose: independent. PSI=30s (existing), specialists=40s (Promise.race per lane), synth=15s (AbortSignal via AbortSignal.any composing caller + timer). 85s + 5s slack under the route's maxDuration=90s
+Why: matches the fail-fast UX goal. a slow PSI gives you a clean PSI timeout error instead of silently stealing time from downstream phases and producing a harder-to-debug failure
+Tradeoffs: worst-case wall clock is the sum not the max. if PSI takes all 30s we dont claw any of it back. fine for now, revisit once we see real p95s
 
 ## End of Day 2 Chunk 3 — 4/18/26
-State: Synthesizer + pipeline + route handler + test harness in place. Typecheck clean.
-Verification state: Structural error paths validated end-to-end — gateway rate-limit on the free tier during test:pipeline exercised degraded-specialist placeholders, degraded-summary fallbacks in image.ts/bundle.ts, and PipelineError(kind: "synth") clean propagation. Happy-path end-to-end output not yet verified — requires the Vercel AI Gateway rate limit to lift or paid credits. Revisit when credits top up.
-Next: Day 3 — eval harness (scripts/eval.ts), /evals page ('use cache' + cacheTag('eval-run')), streaming + UI in /analyze.
+State: synth + pipeline + route handler + test harness all in, typecheck clean
+Verification: structural error paths validated end-to-end - gateway rate-limiting on the free tier during test:pipeline exercised the degraded-specialist placeholders, the degraded-summary fallbacks in image.ts/bundle.ts, and PipelineError(kind: "synth") propagation. happy-path end-to-end not verified yet - waiting on the rate limit to lift or paid credits
+Next: day 3 - eval harness (scripts/eval.ts), /evals page ('use cache' + cacheTag), streaming + UI on /analyze
+
 ## Decision: Eval harness uses 60s synth timeout; API route stays at 30s
 Date: 4/19/26
-Context: Day 3 priority 1 eval harness ran initially with synthTimeoutMs=30000 (matching the API route). First URL of the golden set (hulu.com) failed 3/3 with synth timeouts at 30s; reddit.com failed on run 0 with either a timeout or schema-validation mismatch. Meanwhile Day 2's vercel.com baseline had synth p50=26s with 1/3 at the 30s cap. The pattern: large, findings-rich pages blow past 30s consistently because ReportSchema structured output scales with the number of findings × catalog-enum validation the model has to satisfy per call.
+Context: eval harness first ran with synthTimeoutMs=30000 matching the api route. hulu failed 3/3 on synth timeout at 30s, reddit failed one run. meanwhile vercel baseline had synth p50 ~26s. pattern is that findings-rich pages blow past 30s consistently - structured output scales with findings × catalog-enum validation per call
 Options considered:
-- Hold 30s for both eval and API route. Accept that half the golden set shows synth-timeout failures in the dashboard.
-- Raise only the eval harness synth timeout to 60s, matching the PSI eval-tier carve-out pattern (API route 30s, harness 60s).
-- Raise both synth timeouts globally.
-Chose: Eval harness at 60s, API route stays at 30s. scripts/eval.ts passes synthTimeoutMs=60_000 explicitly; pipeline DEFAULT_SYNTH_TIMEOUT_MS remains 30_000.
-Why: Different consumers have different latency budgets. The API route owes a user a fast failure so they can retry — 30s is aggressive-but-honest. The eval harness exists to measure output quality on real sites; a 30s ceiling means "test runs fail before they produce any signal" which defeats the point. This mirrors psiTimeoutMs=60000 passed by the harness vs 30s default for the route (see the 4/18 phase-budget decision and RunAnalysisOptions.psiTimeoutMs inline rationale).
-Tradeoffs: Eval-tier measurements are not directly comparable to API-route p95s — the harness observes a more permissive ceiling. Accepted: the eval-tier timings inform product decisions (can we live with Sonnet's variance?) rather than SLO reporting. If we later decide the route itself needs >30s, that's a separate decision driven by observed user-facing failure rates.
+- hold 30s for both, live with the dashboard failures
+- raise only the harness to 60s (same carveout pattern we use for PSI)
+- raise both globally
+Chose: harness at 60s, route stays 30s. scripts/eval.ts passes synthTimeoutMs=60_000 explicitly, DEFAULT_SYNTH_TIMEOUT_MS unchanged
+Why: different consumers, different budgets. the route owes the user a fast failure. the harness is there to measure quality, so a ceiling that eats runs before they produce signal defeats the point. same shape as psiTimeoutMs=60000 in the harness
+Tradeoffs: harness timings arent directly comparable to route p95s. fine - harness feeds product decisions not SLOs
 
-## Decision: Coerce relatedFindings string-values to arrays at synth boundary, after eval harness exposed 48% systematic schema-validation failure
+## Decision: Coerce relatedFindings string-values to arrays at synth boundary
 Date: 4/19/26
-Context: After Day 3's eval harness landed and ran against the 7-URL golden set, the first full run showed 43% success (9/21 runs). 10 of 12 failures were Sonnet 4.6 emitting "No object generated: response did not match schema" on the generateObject synth call. Initial response was a retry-with-backoff loop (3 attempts, 500ms linear) — that lifted the rate to 52% but not further. The retry infrastructure also surfaced something more valuable: I'd added synthAttempts instrumentation that captured the full zodIssues list and raw model output on every failed attempt. That's what made real diagnosis possible.
 
-Reading the captured failures: every single failed attempt — 9 of 9 — had the identical zodIssue shape. Path: ["relatedFindings", <some-finding-id>]. Message: "Invalid input: expected array, received string." Sonnet was consistently emitting relatedFindings as a record of single-string values instead of arrays of strings — {"X": "Y"} instead of {"X": ["Y"]}. Across three attempts on the same inputs, the model made the same mistake every time. Not sampling variance — a systematic semantic mismatch between how Sonnet resolves the relatedFindings ambiguity (one-to-one relation feels natural as a scalar) and how my schema encoded it (always-array, even for single entries).
+Context: first full eval run was 43% success (9/21). 10 of 12 failures were sonnet emitting "No object generated: response did not match schema" on the synth generateObject call. first response was a retry-with-backoff loop (3 attempts, 500ms linear) which lifted success to 52% then plateaued. the retry infra incidentally captured synthAttempts with zodIssues + raw model output per attempt, which is what made diagnosis possible
 
-The URLs that failed systematically (developer.mozilla.org 0/3, ticketmaster 0/3, gov.uk 1/3) were exactly the ones whose findings cross-referenced each other. URLs without cross-references (github, vercel) succeeded every time. The eval harness had surgically isolated the failure mode.
+captured failures all had the same zodIssue shape. path: ["relatedFindings", <finding-id>]. message: "Invalid input: expected array, received string." sonnet was emitting relatedFindings as {"X": "Y"} instead of {"X": ["Y"]}. three retries on the same inputs = same error, not sampling variance. a systematic mismatch between how sonnet resolves the one-to-one case (scalar feels natural) and how the schema encoded it (always array)
+
+the URLs that failed systematically (mozilla 0/3, ticketmaster 0/3, gov.uk 1/3) were exactly the ones whose findings cross-referenced each other. URLs without cross refs (github, vercel) succeeded every time
 
 Options considered:
-- Prompt tightening: add explicit instruction that relatedFindings values must always be arrays, even single-element, with an example. Cheapest, but fights the model's natural semantic preference — three consecutive retries producing the same error is strong evidence the pull is structural, not stylistic.
-- Schema loosening with post-parse coercion: accept z.union([z.array(z.string()), z.string()]) at the model-output boundary, coerce bare strings to single-element arrays before handing to downstream consumers. Keeps strict Zod validation at the catalog layer unchanged. Lossless — a bare string value means exactly the same thing as a one-element array.
-- Belt-and-suspenders: prompt-tighten AND coerce, in case one day the model changes behavior.
+- prompt tightening: tell the model "always arrays, even single" with an example. cheapest but three retries saying the same thing is strong evidence the pull is structural
+- schema loosening with post-parse coercion: accept z.union([z.array(z.string()), z.string()]) at the model boundary, coerce bare strings to one-element arrays before downstream. lossless, a bare string means the same thing as a single-element array
+- belt and suspenders: both
 
-Chose: schema loosening + post-parse coercion at the model-output boundary only. Kept strict Zod validation intact at the catalog-recommendation layer (FindingWithValidatedFeatureSchema). Kept the retry loop — it's separately useful for transient Gateway errors (hulu recovered on retry 2 during the 52%-era run, a different failure class).
+Chose: schema loosen + coerce at the model-output boundary only. strict catalog validation at FindingWithValidatedFeatureSchema stays untouched. kept the retry loop because its separately useful for gateway flakes (hulu recovered on retry 2 during the earlier run, different failure class)
 
-Why: This is the same architectural pattern already in use throughout the project — narrow model output schemas, stamp canonical shape in code. The specialists already do this for their deterministic specialist-name field. Option B assumes Sonnet can be prompted out of its natural interpretation; the evidence said it couldn't. Option C accepts the model's actual behavior and reshapes it into canonical form at the boundary. It's not a hack — it's consistent with "facts from data, recommendations from curated catalog, judgment from LLMs" generalized: accept the model's semantic output, coerce to your schema's canonical representation.
+Why: same pattern we already use elsewhere - narrow model-output schemas, stamp canonical shape in code. the specialist schemas already do this. option B assumes you can talk sonnet out of its natural interpretation and the evidence said you cant
 
-Validated empirically: post-fix eval run went to 19/21 success (90.5%), zero schema-validation failures. The coercion metric tells the real story — it fired 6 times across 21 runs (~29%). Sonnet emits the bare-string form of relatedFindings values in roughly 1 of every 3 runs. The coerce isn't defensive code for a rare edge case; it's load-bearing infrastructure for the model's dominant-enough-to-matter behavior.
+Validated: post-fix run went to 19/21 (90.5%), zero schema-validation failures. coercion fires ~6 times across 21 runs so its load-bearing not defensive
 
-Tradeoffs: The schema.ts union introduces a second shape the model-layer type system has to tolerate. Mitigated by the coercion running immediately after generateObject returns, so the loose shape is never exposed to downstream consumers. Test coverage on the coerce function matters — a regression here would silently drop cross-reference data.
+Tradeoffs: the union means the model layer tolerates a second shape. coerce runs immediately after generateObject so the loose shape never leaks downstream. test coverage on the coerce matters - a regression would silently drop cross-reference data
