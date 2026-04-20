@@ -9,16 +9,22 @@ export function FindingsList({
   findings,
   degradedSpecialists,
   // Top priority is rendered emphasized on the synth card; excluding it here
-  // prevents the identical finding from appearing twice on the page.
-  excludeFindingId,
+  // prevents the identical finding from appearing twice on the page. We match
+  // by id first, then fall back to title+category+vercelFeatureId so a
+  // slightly-drifted id from Sonnet can't re-introduce the dup.
+  excludeFinding,
 }: {
   findings: Finding[];
   degradedSpecialists: FindingCategory[];
-  excludeFindingId?: string;
+  excludeFinding?: Finding;
 }) {
-  const visible = excludeFindingId
-    ? findings.filter((f) => f.id !== excludeFindingId)
+  const afterExclusion = excludeFinding
+    ? findings.filter((f) => !isSameFinding(f, excludeFinding))
     : findings;
+  // Belt-and-braces dedup within findings[] itself. Sonnet occasionally
+  // emits two near-identical entries when specialists overlap (e.g. image
+  // + cwv both flag the LCP hero). Keep the first occurrence.
+  const visible = dedupFindings(afterExclusion);
   const byCategory = groupBy(visible, (f) => f.category);
   const degraded = new Set(degradedSpecialists);
 
@@ -87,6 +93,24 @@ export function FindingsList({
         </div>
       )}
     </section>
+  );
+}
+
+function dedupFindings(items: Finding[]): Finding[] {
+  const out: Finding[] = [];
+  for (const f of items) {
+    if (out.some((prev) => isSameFinding(prev, f))) continue;
+    out.push(f);
+  }
+  return out;
+}
+
+function isSameFinding(a: Finding, b: Finding): boolean {
+  if (a.id === b.id) return true;
+  return (
+    a.category === b.category &&
+    a.title === b.title &&
+    a.vercelFeatureId === b.vercelFeatureId
   );
 }
 

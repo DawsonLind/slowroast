@@ -182,7 +182,7 @@ export function Analyzer() {
           <FindingsList
             findings={state.data.report.findings}
             degradedSpecialists={state.data.degradedSpecialists}
-            excludeFindingId={state.data.report.topPriority?.id}
+            excludeFinding={state.data.report.topPriority}
           />
         </>
       ) : null}

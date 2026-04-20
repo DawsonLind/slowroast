@@ -1,6 +1,5 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 import type { FindingCategory, Report } from "@/lib/schemas";
@@ -23,37 +22,13 @@ export function SynthCard(props: SynthCardProps) {
   const { status } = props;
   const isFlipped = status === "success" || status === "error";
 
-  // Sync the card's container height to whichever face is visible. The
-  // front and back have different natural heights (front is compact, back
-  // carries the executive summary + top priority), so without this the
-  // below-fold findings list jumps on flip.
-  const frontRef = useRef<HTMLDivElement>(null);
-  const backRef = useRef<HTMLDivElement>(null);
-  const [containerHeight, setContainerHeight] = useState<number | undefined>();
-
-  useEffect(() => {
-    const measure = () => {
-      const el = isFlipped ? backRef.current : frontRef.current;
-      if (el) setContainerHeight(el.offsetHeight);
-    };
-    measure();
-    // Re-measure on window resize + when the report content lands.
-    const ro = new ResizeObserver(measure);
-    if (frontRef.current) ro.observe(frontRef.current);
-    if (backRef.current) ro.observe(backRef.current);
-    return () => ro.disconnect();
-  }, [isFlipped, props.report, props.errorMessage, status]);
-
   return (
-    <div
-      className="flip-container"
-      style={{ height: containerHeight }}
-    >
+    <div className="flip-container">
       <div className={cn("flip-inner", isFlipped && "is-flipped")}>
-        <div ref={frontRef} className="flip-face">
+        <div className="flip-face">
           <SynthFront {...props} />
         </div>
-        <div ref={backRef} className="flip-face flip-face--back">
+        <div className="flip-face flip-face--back">
           <SynthBack {...props} />
         </div>
       </div>

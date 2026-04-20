@@ -204,6 +204,11 @@
   .flip-inner {
     position: relative;
     width: 100%;
+    /* Stack both faces in a single grid cell so the container's height is
+       max(front, back). Avoids the absolute-positioned back overflowing the
+       container and visually colliding with content below. */
+    display: grid;
+    grid-template-areas: "stack";
     transform-style: preserve-3d;
     transition: transform 720ms cubic-bezier(0.22, 1, 0.36, 1);
   }
@@ -211,12 +216,12 @@
     transform: rotateY(180deg);
   }
   .flip-face {
+    grid-area: stack;
+    align-self: start;
     backface-visibility: hidden;
     -webkit-backface-visibility: hidden;
   }
   .flip-face--back {
-    position: absolute;
-    inset: 0;
     transform: rotateY(180deg);
   }
 
