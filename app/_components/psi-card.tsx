@@ -12,13 +12,11 @@ export interface PsiCardProps {
   elapsedMs: number;
 }
 
-// Temporary "data collection" card that fronts the specialist grid while the
-// deterministic phase (PSI + direct HTML fetch) is in flight. PSI is the
-// critical path — Google runs a real Lighthouse audit in their infra and it
-// regularly takes 20–45s, which is otherwise invisible to the user because
-// specialists don't start until PSI returns. This card makes that wait legible.
-// It unmounts once PSI completes (Analyzer gates the render on
-// phases.psi !== "done").
+// Temp data-collection card shown while PSI + HTML fetch are in flight.
+// PSI is the critical path here - google runs a real lighthouse audit which
+// regularly takes 20-45s, and specialists dont start until it returns.
+// without this card the user stares at four idle specialist cards the whole
+// time. Analyzer unmounts this the moment phases.psi flips to "done".
 export function PsiCard({ psiStatus, htmlStatus, elapsedMs }: PsiCardProps) {
   return (
     <Card className="min-h-[160px] ring-1 ring-border">

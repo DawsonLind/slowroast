@@ -1,36 +1,27 @@
-// Slowroast score: a gentler headline number derived from the raw PageSpeed
-// Insights Lighthouse performance score.
+// Gentler headline score derived from the raw PSI Lighthouse performance
+// score. PSI is strict by design which is fine for engineering ground truth,
+// but real well-built sites cluster in the 40-75 band and a bare 70/100
+// reads as "failing" to most people. The UI shows the curved number as the
+// headline and keeps the raw PSI number visible as a footnote.
 //
-// Why: PSI Lighthouse is strict by design (and rightly so for engineering
-// ground truth), but most competently-built real-world sites cluster in the
-// 40–75 band — which reads as "failing" to anyone who saw 70/100 on a
-// homework assignment. The user-facing headline should encourage rather than
-// scold, while the raw PSI number remains visible for anyone who wants the
-// unvarnished Lighthouse signal.
+// Curve is round(100 * sqrt(psi/100)). Stretches the middle where good sites
+// live without inflating the top. Rough mapping:
+//   psi 28  -> 53  (D)
+//   psi 50  -> 71  (C)
+//   psi 71  -> 84  (B)
+//   psi 85  -> 92  (A)
+//   psi 100 -> 100 (A+)
 //
-// Curve: `displayed = round(100 * sqrt(psi/100))`. Sqrt stretches the middle
-// band where well-built sites live without inflating the top or letting a
-// truly broken site pass. Sample mapping:
-//   PSI  28 → 53  (D, "Needs work")
-//   PSI  50 → 71  (C, "Room to grow")
-//   PSI  71 → 84  (B, "Solid")
-//   PSI  85 → 92  (A, "Great")
-//   PSI 100 → 100 (A+, "Excellent")
-//
-// Specialists still reason on raw PSI in their analysis — the curve only
-// applies to the report-level headline. Keeps facts and framing separate.
+// Specialists still see the raw psi number - the curve is presentation only.
 
 export interface SlowroastScore {
-  // Curved score on the 0–100 range.
+  // curved 0-100 score
   score: number;
-  // Letter grade derived from the curved score. A+ / A / B / C / D / F.
   grade: "A+" | "A" | "B" | "C" | "D" | "F";
-  // Short human label aligned with the grade.
+  // short label to pair with the grade
   band: string;
-  // The raw PSI Lighthouse performance score expressed 0–100 (null when PSI
-  // returned a null performance score, which happens for extreme failures).
-  // Surfaced verbatim so the UI can render a "PSI raw: X/100" transparency
-  // footnote without re-deriving from the report-level PSI field.
+  // raw PSI perf score on 0-100 (null when PSI returned null, rare)
+  // surfaced so the UI can show "PSI raw: X/100" without recomputing
   psiRaw: number | null;
 }
 
@@ -39,9 +30,8 @@ export function computeSlowroastScore(
 ): SlowroastScore | null {
   if (psiPerformance == null) return null;
 
-  // PSI categories[*].score is a 0–1 decimal per the Lighthouse API contract;
-  // we defensively clamp in case a future change ever hands us a pre-scaled
-  // value or a NaN.
+  // PSI categories[*].score is a 0-1 decimal per the lighthouse contract.
+  // clamp defensively in case something ever hands us a pre-scaled value or NaN
   const psi01 = clamp(psiPerformance, 0, 1);
   const psiRaw = Math.round(psi01 * 100);
   const curved = Math.round(100 * Math.sqrt(psi01));

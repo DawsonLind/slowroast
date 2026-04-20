@@ -310,10 +310,10 @@ function renderInlineMarkdown(text: string): React.ReactNode[] {
   return nodes;
 }
 
-// Headline score display. The grade letter is the eye-catch; the numeric
-// score is supporting detail. Color band is intentionally soft — the aim is
-// "encouraging, honest" not "traffic light". Tone derives from the grade
-// rather than a raw numeric cutoff so the visual and text labels stay in sync.
+// headline score display. the letter grade is the eye-catch, number is
+// supporting detail. soft colors on purpose - aiming for encouraging/honest
+// not traffic light. tone maps from the grade (not a numeric cutoff) so the
+// visual and the text label stay in sync
 const GRADE_TONE: Record<
   SlowroastScoreReport["grade"],
   { ring: string; text: string; bg: string }

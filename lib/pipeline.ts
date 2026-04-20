@@ -24,37 +24,28 @@ import type { ProgressEvent } from "@/lib/progress-events";
 
 export type { SynthAttempt } from "@/lib/synth";
 
-// Phase budgets. Independent hard caps — a slow PSI does NOT steal time from
-// specialists. Route-level maxDuration adds a safety net above these.
+// phase budgets. independent caps so a slow PSI cant silently rob specialists.
+// route maxDuration sits above these as a safety net.
 //
-// Synth budget history:
-//   15s → 30s after vercel.com testing (Day 2). 30s held only because vercel.com
-//   sits at the fast end of the distribution.
-//   30s → 90s on 2026-04-19 after the 7-URL eval (evals/results.json) measured
-//   the real distribution: median 32s, p75 41s, p90 65s, p95 70s, max 70s
-//   (reddit.com). The 30s cap was timing out 58% of real-world runs. 90s
-//   covers p95 with ~25% slack; complex sites (many findings → larger
-//   structured output) are the cost driver.
+// synth budget history: started at 15s (day 2 vercel.com only), bumped to 30s,
+// then 90s on 2026-04-19 after the 7-URL eval showed the real distribution -
+// median 32s, p95 70s. the old 30s cap was killing 58% of real runs. complex
+// sites with many findings drive the tail (bigger structured output)
 const SPECIALIST_TIMEOUT_MS = 40_000;
 const DEFAULT_SYNTH_TIMEOUT_MS = 90_000;
 
-// Cap concurrent specialist execution. Discovered empirically: four specialists
-// firing at once (each doing the two-call pattern — tool-loop + dedicated
-// summary) bursts past Vercel AI Gateway rate limits and 429s a subset of
-// calls. This is a pacer, not a retry layer. Architecture stays parallel
-// (Promise.all fans out all four below); p-limit just gates when each
-// specialist's callback starts executing. Trade-off: worst-case specialist
-// phase wall clock is 2 × SPECIALIST_TIMEOUT_MS instead of 1 ×, which tightens
-// margin against the 120s route cap but stays safe under typical load (p95
-// specialist was 22.7s in baseline measurement — well under 40s).
+// cap concurrent specialists. learned the hard way - four at once (each doing
+// two calls: tool-loop + summary) bursts past the Gateway rate limit and 429s
+// a bunch of calls. this is a pacer not a retry layer. Promise.all still fans
+// all four out, p-limit just gates when each callback starts. worst-case
+// phase wall clock goes from 1x to 2x SPECIALIST_TIMEOUT_MS but thats still
+// fine under the route cap
 const SPECIALIST_CONCURRENCY = 2;
 const specialistLimit = pLimit(SPECIALIST_CONCURRENCY);
 
-// Degradation marker: a specialist that timed out or threw returns this
-// sentinel summary. The synth prompt keys off the "[specialist-failed]"
-// prefix to exclude the lane and note the skip in executiveSummary. Keeps
-// SpecialistOutputSchema pure (no error field) while letting one type flow
-// through the whole pipeline.
+// sentinel summary prefix for a degraded lane (timeout/throw). synth prompt
+// keys off "[specialist-failed]" to skip the lane and name it in the exec
+// summary. keeps SpecialistOutputSchema unchanged - one type flows through
 const FAILURE_PREFIX = "[specialist-failed]";
 
 const EMPTY_ASSETS: ParsedAssets = {
@@ -74,9 +65,9 @@ export type PipelineErrorKind =
 export class PipelineError extends Error {
   readonly kind: PipelineErrorKind;
   readonly cause?: unknown;
-  // Present only for kind: "synth" when runSynth exhausted all attempts or
-  // timed out mid-loop. Carries each attempt's raw Sonnet output + ZodError
-  // issues so the eval harness can persist them for diagnosis.
+  // only set for kind: "synth" when runSynth exhausted retries or timed out.
+  // carries each attempt's raw sonnet output + zod issues so the eval harness
+  // can save them for diagnosis later
   readonly synthAttempts?: SynthAttempt[];
 
   constructor(
@@ -94,13 +85,11 @@ export class PipelineError extends Error {
 }
 
 export interface PhaseTimings {
-  // Wall-clock milliseconds for the PSI+HTML data-fetch phase (these two run
-  // in parallel via Promise.all; the reported time is the phase duration,
-  // i.e. max of the two, not the sum).
+  // wall-clock ms for PSI+HTML (they run in parallel, this is the max of
+  // the two not the sum)
   psiMs: number;
-  // Per-specialist wall-clock milliseconds as observed by wrapSpecialist.
-  // Under SPECIALIST_CONCURRENCY=2 these overlap in pairs rather than all
-  // four, so imageMs + bundleMs + cacheMs + cwvMs will exceed specialistPhaseMs.
+  // per-specialist wall clock from wrapSpecialist. with concurrency=2 the
+  // four overlap in pairs so their sum exceeds specialistPhaseMs
   imageMs: number;
   bundleMs: number;
   cacheMs: number;
@@ -121,28 +110,25 @@ export interface AnalysisResult {
   degradedSpecialists: FindingCategory[];
   htmlBlocked: boolean;
   phaseTimings: PhaseTimings;
-  // Per-attempt history from runSynth. Always at least one entry. An eventual
-  // success after retries still surfaces the intermediate failure payloads
-  // so we can learn from transient misses.
+  // per-attempt history from runSynth, always at least one entry. a success
+  // after retries still surfaces the intermediate failures so we can look
+  // back at transient misses
   synthAttempts: SynthAttempt[];
 }
 
 export interface RunAnalysisOptions {
   signal?: AbortSignal;
-  // Overrides fetchPsi's 60s default. The API route should OMIT this. Manual
-  // harnesses (scripts/test-pipeline.ts, eval runs) may pass higher to capture
-  // long-tail distributions without truncation, but the default already covers
-  // observed p95 (~45s on the 7-URL eval).
+  // overrides fetchPsi's 60s default. the API route should leave this unset.
+  // manual harnesses (test-pipeline, eval) can pass higher to capture the
+  // long tail without truncation
   psiTimeoutMs?: number;
-  // Overrides the 90s synth default. Mirrors psiTimeoutMs so eval harnesses
-  // can tighten or loosen independently of the API route — the eval harness
-  // currently runs with 150s to record the natural distribution without
-  // truncation.
+  // overrides the 90s synth default. same idea as psiTimeoutMs - the eval
+  // harness currently runs with 150s to record the natural distribution
   synthTimeoutMs?: number;
-  // Optional progress sink. The API route uses this to forward lifecycle
-  // events over NDJSON to the browser so the loading UI reflects real work
-  // instead of a hardcoded client-side timer. Non-route callers (eval harness,
-  // scripts/test-pipeline.ts) leave it unset and the emits are no-ops.
+  // optional progress sink. the API route forwards lifecycle events over
+  // NDJSON to the browser so the loading UI reflects real work instead of
+  // a hardcoded ticker. non-route callers leave it unset and the emits are
+  // no-ops
   onEvent?: (event: ProgressEvent) => void;
 }
 
@@ -155,10 +141,9 @@ export async function runAnalysis(
   const emit = opts.onEvent ?? (() => {});
   const totalStartedAt = Date.now();
 
-  // Phase 1: deterministic data collection. PSI enforces its own 60s cap;
-  // fetchHtml is 10s. Both accept AbortSignal so caller disconnects win.
-  // Each fetch gets its own timing/emit so the UI can light up the HTML card
-  // independently of the slower PSI call.
+  // phase 1: deterministic data collection. PSI has its own 60s cap, fetchHtml
+  // is 10s. both honor AbortSignal so caller disconnects win. each fetch emits
+  // independently so the UI can light up the HTML side without waiting on PSI
   const psiStartedAt = Date.now();
   emit({ type: "phase", phase: "psi", status: "start" });
   emit({ type: "phase", phase: "html", status: "start" });
@@ -213,10 +198,9 @@ export async function runAnalysis(
   const cacheSlice = extractCacheSlice(psi, htmlResult);
   const cwvSlice = extractCwvSlice(psi, htmlResult, assets);
 
-  // Emit "queued" for all four the moment we hand them to p-limit. Two will
-  // flip to "running" immediately (p-limit(2)); the other two sit queued for
-  // a beat, which the UI shows honestly instead of pretending all four
-  // started at once.
+  // emit "queued" for all four as they go into p-limit. two flip to "running"
+  // immediately, the other two sit queued for a beat - the UI shows this
+  // honestly instead of pretending all four started at once
   for (const cat of ["image", "bundle", "cache", "cwv"] as const) {
     emit({ type: "specialist", category: cat, status: "queued" });
   }
@@ -259,8 +243,8 @@ export async function runAnalysis(
 
   throwIfAborted(opts.signal);
 
-  // Phase 3: synthesis. Compose caller signal with a per-phase timeout so
-  // either cancels cleanly. AbortSignal.any is in Node 20+ (Vercel default).
+  // phase 3: synth. compose the caller signal with a phase timeout so either
+  // can cancel cleanly (AbortSignal.any needs node 20+, vercel default)
   const synthTimeoutMs = opts.synthTimeoutMs ?? DEFAULT_SYNTH_TIMEOUT_MS;
   const synthController = new AbortController();
   const synthTimer = setTimeout(() => synthController.abort(), synthTimeoutMs);
@@ -268,10 +252,9 @@ export async function runAnalysis(
     ? AbortSignal.any([opts.signal, synthController.signal])
     : synthController.signal;
 
-  // Compute the curved Slowroast score from the raw PSI performance score.
-  // Passed into runSynth so Sonnet frames the executive summary around it
-  // rather than the harsher PSI figure, and stamped onto the Report below so
-  // the UI can render a grade badge without re-deriving.
+  // curve the raw PSI perf score into the slowroast score. passed to runSynth
+  // so sonnet uses it in the exec summary, and stamped on the report below so
+  // the UI can render a grade badge without recomputing
   const slowroastScore = computeSlowroastScore(
     psi.categories.performance.score,
   );
@@ -286,9 +269,9 @@ export async function runAnalysis(
     });
   } catch (err) {
     const synthElapsed = Date.now() - synthStartedAt;
-    // SynthFailedError carries the per-attempt history. Whether we got here
-    // via exhausted retries, abort, or non-schema error, the attempts array
-    // is what downstream diagnosis actually needs.
+    // SynthFailedError carries the attempt history. however we got here
+    // (exhausted retries, abort, non-schema error) the attempts array is
+    // what downstream diagnosis actually needs
     const attempts =
       err instanceof SynthFailedError ? err.attempts : undefined;
     if (synthController.signal.aborted) {
@@ -361,13 +344,11 @@ export async function runAnalysis(
   };
 }
 
-// Wraps a specialist's run function with a per-call timeout. On timeout or
-// error, returns a SpecialistOutput whose summary begins with FAILURE_PREFIX
-// — the synth prompt knows to skip it. We intentionally DO NOT re-throw:
-// keeping the per-lane failure local is what makes "partial failures don't
-// fail the whole report" mechanical, not advisory.
-// Also returns the observed wall clock so the caller can surface per-lane
-// timings in phaseTimings.
+// wraps a specialist's run fn with a per-call timeout. on timeout or error
+// it returns a SpecialistOutput whose summary starts with FAILURE_PREFIX,
+// which the synth prompt knows to skip. deliberately does NOT re-throw -
+// keeping the failure local is what makes "partial failures dont kill the
+// report" mechanical not advisory. also returns elapsed ms for phaseTimings
 interface WrappedSpecialist {
   output: SpecialistOutput;
   elapsedMs: number;

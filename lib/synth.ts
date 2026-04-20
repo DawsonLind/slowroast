@@ -5,27 +5,23 @@ import type { Finding, SpecialistOutput } from "@/lib/schemas";
 import type { SlowroastScore } from "@/lib/scoring";
 import { FindingWithValidatedFeatureSchema } from "@/lib/vercel-features";
 
-// Two schemas here — deliberate. The MODEL-FACING schema is permissive about
-// the one shape Sonnet refuses to emit correctly; the DOWNSTREAM-FACING schema
-// is strict and canonical. runSynth coerces between the two.
+// two schemas here, on purpose. the model-facing one is permissive about the
+// one shape sonnet refuses to emit correctly, the downstream one is strict +
+// canonical. runSynth coerces between them.
 //
-// Why: eval runs (evals/results.json, 2026-04-19) showed Sonnet systematically
-// emitting `relatedFindings` values as finding-ID STRINGS (e.g. "gtm-blocking-
-// render") rather than arrays of full Finding objects. The model's mental
-// model is "related finding = ID reference," and when there's a single
-// relation it emits a bare string rather than a single-element array. All 9
-// exhausted-retry failures had identical zodIssue shape: {expected: "array",
-// received: "string", path: ["relatedFindings", "<id>"]}. Retry doesn't help
-// — same inputs produce the same structural mistake. Loosening to accept
-// string | string[] at the model layer and coercing to string[] before
-// handoff is lossless (a single-element array IS the single-string case) and
-// matches the "narrow model output, stamp canonical shape in code" pattern
-// we already use for url and generatedAt.
+// background: eval run 2026-04-19 showed sonnet systematically emitting
+// relatedFindings values as bare strings ("gtm-blocking-render") instead of
+// arrays. every single exhausted-retry failure had the same zodIssue shape:
+// expected array, received string, path ["relatedFindings", "<id>"]. retry
+// doesnt help - same inputs, same mistake. loosening to accept string|string[]
+// at the model layer and coercing to string[] before handoff is lossless
+// (a single-element array means the same thing as a single string) and
+// matches the pattern we already use for url + generatedAt.
 //
-// url + generatedAt are stamped in code after validation — no reason to let
-// the model mangle an ISO timestamp or echo a URL we already hold. Findings
-// use the strict feature-id-validated shape so Zod rejects a hallucinated
-// catalog entry at parse time.
+// url + generatedAt are stamped in code after validation anyway, no reason
+// to let the model mangle an iso timestamp or echo a url we already have.
+// findings use the strict feature-id-validated shape so zod rejects a
+// hallucinated catalog entry at parse time.
 const ModelSynthOutputSchema = z.object({
   executiveSummary: z.string().min(1),
   topPriority: FindingWithValidatedFeatureSchema.optional(),
@@ -43,11 +39,11 @@ export const SynthOutputSchema = z.object({
 });
 export type SynthOutput = z.infer<typeof SynthOutputSchema>;
 
-// Per CONSTRAINTS: preserve vercelFeatureId / category / evidence / affected
-// resources verbatim from the inputs. The Sonnet synthesizer's value is
-// prioritization and prose — NOT re-grounding the catalog, which specialists
-// already did under strict prompt + tool constraints. The strict schema
-// enforces catalog integrity; the prompt enforces preservation.
+// the CONSTRAINTS block below requires preserving vercelFeatureId / category
+// / evidence / affectedResources verbatim from the inputs. sonnet's job here
+// is prioritization + prose, not re-grounding the catalog (specialists did
+// that under strict prompt + tool constraints). the strict schema enforces
+// catalog integrity, the prompt enforces preservation
 const INSTRUCTIONS = `You are the synthesizer in a multi-agent web-performance analyzer. Four specialist analysts (image, bundle, cache, cwv) have already produced grounded findings from PageSpeed Insights data; your job is to integrate their outputs into a single prioritized remediation report for an engineering lead at a Vercel-ICP company.
 
 ROLE
@@ -79,20 +75,17 @@ CONSTRAINTS
 - relatedFindings is optional and should usually be omitted for v1 — specialists have tight scope boundaries and same-root-cause duplicates are rare. Only populate it if you see two findings from different lanes that truly describe the same root cause.
 - executiveSummary is prose in plain text. No markdown headings, no bullet lists, no "TL;DR" preambles.`;
 
-// Retry policy: 3 total attempts with linear backoff. Picked because the
-// initial eval run (evals/results.json, 2026-04-19) showed 10 of 12 failures
-// as NoObjectGeneratedError scattered across 6 of 7 URLs — same inputs
-// succeeded on some runs, failed on others. That's the signature of
-// non-systematic structured-output variance, exactly the failure mode
-// resampling fixes. We keep the strict catalog-enum schema and the prompt
-// unchanged; if retry doesn't land us >80% the captured attempt history will
-// tell us which field Sonnet is actually tripping on.
+// retry policy: 3 attempts, linear backoff. the initial eval run (2026-04-19)
+// had 10/12 failures as NoObjectGeneratedError scattered across 6 of 7 URLs,
+// same inputs succeeding some runs and failing others - non-systematic
+// variance, exactly what resampling is for. schema + prompt stay unchanged,
+// the captured attempt history tells us if we later need to look at a
+// specific field
 const MAX_SYNTH_ATTEMPTS = 3;
 const SYNTH_RETRY_BASE_DELAY_MS = 500;
 
-// Keep the attempt record small. Sonnet emits plenty of tokens; 2 KiB is
-// enough to see malformed fields / enum near-misses / truncation without
-// bloating results.json.
+// cap the attempt record size. 2 KiB is enough to see malformed fields or
+// enum near-misses without bloating results.json
 const RAW_TEXT_CAP_BYTES = 2048;
 
 export interface SynthAttempt {
@@ -133,10 +126,9 @@ export class SynthFailedError extends Error {
 
 export interface RunSynthOptions {
   signal?: AbortSignal;
-  // Optional Slowroast score to surface in the synth prompt header. When
-  // present, the synthesizer uses its curved number and grade in prose
-  // instead of the raw PSI figure. Pass undefined if PSI didn't yield a
-  // score — the prompt simply omits the block in that case.
+  // optional slowroast score to surface in the synth prompt header. when set,
+  // sonnet frames the exec summary around the curved number + grade instead
+  // of raw PSI. if PSI didnt return a score we just omit the block
   slowroastScore?: SlowroastScore;
 }
 
@@ -327,9 +319,9 @@ export function buildSynthPrompt(
   const lines: string[] = [];
   lines.push(`URL: ${url}`);
   if (slowroastScore) {
-    // Header block the synth prompt's SCORING FRAMING section references.
-    // Rendered as a named block so Sonnet reliably picks it up rather than
-    // inlining raw PSI phrasing from the specialist summaries.
+    // header block the SCORING FRAMING section of the prompt references.
+    // named so sonnet picks it up instead of falling back on the raw PSI
+    // number from the specialist summaries
     lines.push(
       `Slowroast score: ${slowroastScore.score}/100 — grade ${slowroastScore.grade} ("${slowroastScore.band}")${
         slowroastScore.psiRaw != null
