@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { z } from "zod";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -12,17 +13,36 @@ import type {
   Report,
   Severity,
 } from "@/lib/schemas";
+import { FindingCategorySchema, ReportSchema } from "@/lib/schemas";
 import type { PhaseTimings } from "@/lib/pipeline";
 import {
-  SPECIALIST_DONE_AT_MS,
-  SPECIALIST_META,
-  SPECIALIST_ORDER,
-  SYNTH_START_AT_MS,
-} from "@/lib/ui-meta";
+  ProgressEventSchema,
+  type ProgressEvent,
+} from "@/lib/progress-events";
+import { SPECIALIST_META, SPECIALIST_ORDER } from "@/lib/ui-meta";
 import { UrlForm } from "./url-form";
 import { SpecialistGrid, type SpecialistViewState } from "./specialist-grid";
 import { SynthCard, type SynthStatus } from "./synth-card";
+import { PsiCard } from "./psi-card";
 import { FindingsList } from "./findings-list";
+
+// Zod shape for the "result" event payload. Kept local because it's only
+// used at this one boundary — no reason to publicly export it.
+const ResultPayloadSchema = z.object({
+  report: ReportSchema,
+  degradedSpecialists: z.array(FindingCategorySchema),
+  htmlBlocked: z.boolean(),
+  phaseTimings: z.object({
+    psiMs: z.number(),
+    imageMs: z.number(),
+    bundleMs: z.number(),
+    cacheMs: z.number(),
+    cwvMs: z.number(),
+    specialistPhaseMs: z.number(),
+    synthMs: z.number(),
+    totalMs: z.number(),
+  }),
+});
 
 interface SuccessResponse {
   report: Report;
@@ -37,26 +57,63 @@ interface ErrorResponse {
   details?: unknown;
 }
 
+// Per-specialist state reflected from the streamed lifecycle events. The UI
+// reads startedAt/completedAt to show real elapsed time, rather than
+// extrapolating from a global client-side ticker.
+interface SpecialistRuntime {
+  status: "pending" | "queued" | "running" | "done" | "failed";
+  startedAt?: number;
+  completedAt?: number;
+  findingsCount?: number;
+  topSeverity?: Severity;
+}
+
+type SpecialistRuntimeMap = Record<FindingCategory, SpecialistRuntime>;
+
+type PhaseStatus = "pending" | "running" | "done";
+
+interface PhaseRuntime {
+  psi: PhaseStatus;
+  html: PhaseStatus;
+}
+
 type AnalyzeState =
   | { kind: "idle" }
-  | { kind: "analyzing"; startedAt: number }
-  | { kind: "success"; data: SuccessResponse }
+  | {
+      kind: "analyzing";
+      startedAt: number;
+      specialists: SpecialistRuntimeMap;
+      phases: PhaseRuntime;
+      synthStatus: "waiting" | "synthesizing";
+    }
+  | {
+      kind: "success";
+      data: SuccessResponse;
+      specialists: SpecialistRuntimeMap;
+    }
   | {
       kind: "error";
       status: number;
       error: string;
       message?: string;
-      // Partial-success error: synth failed but specialist findings may still
-      // be present in the response body. API currently doesn't surface these
-      // on a PipelineError, but the shape is here if we wire it later.
-      partial?: SuccessResponse;
+      specialists?: SpecialistRuntimeMap;
     };
+
+function initSpecialists(): SpecialistRuntimeMap {
+  return {
+    image: { status: "pending" },
+    bundle: { status: "pending" },
+    cache: { status: "pending" },
+    cwv: { status: "pending" },
+  };
+}
 
 export function Analyzer() {
   const [url, setUrl] = useState("https://vercel.com");
   const [state, setState] = useState<AnalyzeState>({ kind: "idle" });
-  // Tick for elapsed-counter + progression animations. 400ms is smooth
-  // enough for the pulse-driven UI without burning renders.
+  // Tick for elapsed-counter animation. Real per-specialist start/end
+  // timestamps are authoritative — this just triggers re-renders so the
+  // seconds counter advances while a card is running.
   const [, forceTick] = useState(0);
   useEffect(() => {
     if (state.kind !== "analyzing") return;
@@ -77,7 +134,13 @@ export function Analyzer() {
 
     abortRef.current?.abort();
     abortRef.current = new AbortController();
-    setState({ kind: "analyzing", startedAt: Date.now() });
+    setState({
+      kind: "analyzing",
+      startedAt: Date.now(),
+      specialists: initSpecialists(),
+      phases: { psi: "pending", html: "pending" },
+      synthStatus: "waiting",
+    });
 
     try {
       const res = await fetch("/api/analyze", {
@@ -98,8 +161,19 @@ export function Analyzer() {
         return;
       }
 
-      const data = (await res.json()) as SuccessResponse;
-      setState({ kind: "success", data });
+      if (!res.body) {
+        setState({
+          kind: "error",
+          status: 0,
+          error: "network",
+          message: "Response body is empty.",
+        });
+        return;
+      }
+
+      await consumeStream(res.body, (event) =>
+        setState((prev) => reduceEvent(prev, event)),
+      );
     } catch (err) {
       if (err instanceof DOMException && err.name === "AbortError") return;
       setState({
@@ -126,13 +200,12 @@ export function Analyzer() {
     if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
   };
 
-  // Derived view state based on analysis phase.
-  const elapsedMs =
+  const totalElapsedMs =
     state.kind === "analyzing" ? Date.now() - state.startedAt : 0;
 
-  const specialistStates = computeSpecialistStates(state, elapsedMs);
-  const synthStatus = computeSynthStatus(state, elapsedMs);
-  const synthProps = buildSynthProps(state, elapsedMs, specialistStates);
+  const specialistStates = computeSpecialistStates(state);
+  const synthStatus = computeSynthStatus(state);
+  const synthProps = buildSynthProps(state, totalElapsedMs, specialistStates);
 
   const isAnalyzing = state.kind === "analyzing";
   const isError = state.kind === "error";
@@ -165,9 +238,15 @@ export function Analyzer() {
 
       {state.kind !== "idle" ? (
         <>
+          {state.kind === "analyzing" && state.phases.psi !== "done" ? (
+            <PsiCard
+              psiStatus={state.phases.psi}
+              htmlStatus={state.phases.html}
+              elapsedMs={totalElapsedMs}
+            />
+          ) : null}
           <SpecialistGrid
             states={specialistStates}
-            elapsedMs={elapsedMs}
             onCardClick={scrollToCategory}
           />
           <SynthCard {...synthProps} status={synthStatus} />
@@ -191,45 +270,174 @@ export function Analyzer() {
 }
 
 // ---------------------------------------------------------------------------
-// View-state derivation — this is where the "theater" timing meets real
-// API state. Pre-response we drive specialist progression from observed
-// eval timings; post-response we snap to reality.
+// NDJSON stream consumption
+// ---------------------------------------------------------------------------
+
+async function consumeStream(
+  body: ReadableStream<Uint8Array>,
+  onEvent: (event: ProgressEvent) => void,
+): Promise<void> {
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) {
+      // Flush any trailing partial line. The server always writes a newline
+      // after each event, but be defensive in case a proxy strips the final
+      // one.
+      if (buffer.trim().length > 0) dispatchLine(buffer, onEvent);
+      return;
+    }
+    buffer += decoder.decode(value, { stream: true });
+    let idx: number;
+    while ((idx = buffer.indexOf("\n")) !== -1) {
+      const line = buffer.slice(0, idx);
+      buffer = buffer.slice(idx + 1);
+      dispatchLine(line, onEvent);
+    }
+  }
+}
+
+function dispatchLine(line: string, onEvent: (event: ProgressEvent) => void) {
+  const trimmed = line.trim();
+  if (trimmed.length === 0) return;
+  let raw: unknown;
+  try {
+    raw = JSON.parse(trimmed);
+  } catch {
+    console.warn("[analyzer] skipped non-JSON stream line", trimmed);
+    return;
+  }
+  const parsed = ProgressEventSchema.safeParse(raw);
+  if (!parsed.success) {
+    console.warn("[analyzer] invalid progress event", parsed.error.issues);
+    return;
+  }
+  onEvent(parsed.data);
+}
+
+// ---------------------------------------------------------------------------
+// Event reducer — converts a streamed event into a new AnalyzeState
+// ---------------------------------------------------------------------------
+
+function reduceEvent(prev: AnalyzeState, event: ProgressEvent): AnalyzeState {
+  // Events arriving after terminal states (success/error) are dropped — the
+  // server closes the stream after "result" or "error", but a late event
+  // shouldn't corrupt UI.
+  if (prev.kind !== "analyzing") return prev;
+
+  if (event.type === "phase") {
+    const next: PhaseRuntime = { ...prev.phases };
+    next[event.phase] = event.status === "start" ? "running" : "done";
+    return { ...prev, phases: next };
+  }
+
+  if (event.type === "specialist") {
+    const nextSpecs: SpecialistRuntimeMap = { ...prev.specialists };
+    const current = nextSpecs[event.category];
+    if (event.status === "queued") {
+      nextSpecs[event.category] = { ...current, status: "queued" };
+    } else if (event.status === "running") {
+      nextSpecs[event.category] = {
+        ...current,
+        status: "running",
+        startedAt: Date.now(),
+      };
+    } else if (event.status === "done") {
+      nextSpecs[event.category] = {
+        ...current,
+        status: "done",
+        completedAt: Date.now(),
+        findingsCount: event.findingsCount,
+        topSeverity: event.topSeverity,
+      };
+    } else {
+      nextSpecs[event.category] = {
+        ...current,
+        status: "failed",
+        completedAt: Date.now(),
+      };
+    }
+    return { ...prev, specialists: nextSpecs };
+  }
+
+  if (event.type === "synth") {
+    // "done" flips to "success" via the "result" event that follows immediately
+    // after; we keep synthStatus as "synthesizing" in the meantime so the card
+    // never briefly regresses.
+    if (event.status === "start") {
+      return { ...prev, synthStatus: "synthesizing" };
+    }
+    return prev;
+  }
+
+  if (event.type === "result") {
+    // Validate the result payload shape on the client before committing it
+    // to state. The inner Report was already schema-validated server-side
+    // (generateObject + coerceSynthOutput), but client-side re-validation
+    // protects against any wire-format drift or MITM rewrite.
+    const raw = event.result;
+    const parsed = ResultPayloadSchema.safeParse(raw);
+    if (!parsed.success) {
+      console.error(
+        "[analyzer] result payload failed schema validation",
+        parsed.error.issues,
+      );
+      return {
+        kind: "error",
+        status: 0,
+        error: "invalid_result",
+        message: "Server returned a result that didn't match the expected shape.",
+        specialists: prev.specialists,
+      };
+    }
+    return {
+      kind: "success",
+      data: parsed.data,
+      specialists: prev.specialists,
+    };
+  }
+
+  // event.type === "error"
+  return {
+    kind: "error",
+    status: 0,
+    error: event.kind,
+    message: event.message,
+    specialists: prev.specialists,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// View-state derivation — maps the runtime event log into SpecialistViewState
+// that the grid expects.
 // ---------------------------------------------------------------------------
 
 function computeSpecialistStates(
   state: AnalyzeState,
-  elapsedMs: number,
 ): Record<FindingCategory, SpecialistViewState> {
   if (state.kind === "idle") {
     return fillStates({ status: "idle" });
   }
 
-  if (state.kind === "analyzing") {
-    const out = {} as Record<FindingCategory, SpecialistViewState>;
-    for (const cat of SPECIALIST_ORDER) {
-      const doneAt = SPECIALIST_DONE_AT_MS[cat];
-      if (elapsedMs < doneAt - 4000) {
-        out[cat] = { status: "working" };
-      } else if (elapsedMs < doneAt) {
-        out[cat] = { status: "near-done" };
-      } else {
-        // Until the real response lands, show "near-done" (not "done") —
-        // we don't yet have the true findings count. This avoids lying
-        // about results before the server says so.
-        out[cat] = { status: "near-done" };
-      }
-    }
-    return out;
-  }
-
+  // Success path: prefer report-derived counts/severities over the runtime
+  // map because the synth can drop findings via its 10-cap. Fall back to the
+  // runtime map for timing info.
   if (state.kind === "success") {
     const { report, degradedSpecialists } = state.data;
     const degraded = new Set(degradedSpecialists);
     const byCat = groupByCategory(report.findings);
     const out = {} as Record<FindingCategory, SpecialistViewState>;
     for (const cat of SPECIALIST_ORDER) {
+      const runtime = state.specialists[cat];
       if (degraded.has(cat)) {
-        out[cat] = { status: "error" };
+        out[cat] = {
+          status: "error",
+          startedAt: runtime.startedAt,
+          completedAt: runtime.completedAt,
+        };
         continue;
       }
       const items = byCat.get(cat) ?? [];
@@ -237,23 +445,61 @@ function computeSpecialistStates(
         status: "done",
         findingsCount: items.length,
         topSeverity: worstSeverity(items),
+        startedAt: runtime.startedAt,
+        completedAt: runtime.completedAt,
       };
     }
     return out;
   }
 
-  // Error — specialists we know failed show as error; the rest collapse to
-  // idle so the grid doesn't look like it succeeded.
-  return fillStates({ status: "error" });
+  if (state.kind === "error") {
+    // Preserve whatever runtime state we had — showing partial progress on
+    // error beats collapsing everything back to idle.
+    const out = {} as Record<FindingCategory, SpecialistViewState>;
+    for (const cat of SPECIALIST_ORDER) {
+      out[cat] = runtimeToView(state.specialists?.[cat]);
+    }
+    return out;
+  }
+
+  // Analyzing
+  const out = {} as Record<FindingCategory, SpecialistViewState>;
+  for (const cat of SPECIALIST_ORDER) {
+    out[cat] = runtimeToView(state.specialists[cat]);
+  }
+  return out;
 }
 
-function computeSynthStatus(state: AnalyzeState, elapsedMs: number): SynthStatus {
-  if (state.kind === "idle") return "waiting";
-  if (state.kind === "analyzing") {
-    return elapsedMs < SYNTH_START_AT_MS ? "waiting" : "synthesizing";
+function runtimeToView(r?: SpecialistRuntime): SpecialistViewState {
+  if (!r || r.status === "pending") return { status: "idle" };
+  if (r.status === "queued") {
+    return { status: "queued" };
   }
+  if (r.status === "running") {
+    return { status: "working", startedAt: r.startedAt };
+  }
+  if (r.status === "failed") {
+    return {
+      status: "error",
+      startedAt: r.startedAt,
+      completedAt: r.completedAt,
+    };
+  }
+  // done
+  return {
+    status: "done",
+    findingsCount: r.findingsCount,
+    topSeverity: r.topSeverity,
+    startedAt: r.startedAt,
+    completedAt: r.completedAt,
+  };
+}
+
+function computeSynthStatus(state: AnalyzeState): SynthStatus {
+  if (state.kind === "idle") return "waiting";
   if (state.kind === "success") return "success";
-  return "error";
+  if (state.kind === "error") return "error";
+  return state.synthStatus;
 }
 
 function buildSynthProps(
@@ -262,9 +508,7 @@ function buildSynthProps(
   specialistStates: Record<FindingCategory, SpecialistViewState>,
 ) {
   const doneCount = SPECIALIST_ORDER.filter(
-    (c) =>
-      specialistStates[c].status === "done" ||
-      specialistStates[c].status === "near-done",
+    (c) => specialistStates[c].status === "done",
   ).length;
 
   if (state.kind === "success") {
@@ -362,6 +606,8 @@ const ERROR_HINTS: Record<string, string> = {
     "All four specialists failed — most commonly a Gateway rate-limit spike. Retrying in a few seconds usually resolves this.",
   invalid_body:
     "The URL didn't pass validation. Make sure it starts with https:// and is well-formed.",
+  invalid_result:
+    "Server returned a response that didn't match the expected shape. Usually transient — retry.",
   network:
     "The browser couldn't reach the server. Check your connection and retry.",
   aborted: "Request was cancelled.",

@@ -8,12 +8,13 @@ import {
   Activity,
   AlertTriangle,
   Check,
+  Info,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { FindingCategory, Severity } from "@/lib/schemas";
-import { SPECIALIST_META } from "@/lib/ui-meta";
+import { SPECIALIST_META, SPECIALIST_TOOLTIP } from "@/lib/ui-meta";
 
-export type SpecialistStatus = "idle" | "working" | "near-done" | "done" | "error";
+export type SpecialistStatus = "idle" | "queued" | "working" | "done" | "error";
 
 const CATEGORY_ICON: Record<FindingCategory, typeof ImageIcon> = {
   image: ImageIcon,
@@ -48,7 +49,8 @@ const WORKING_STATUS_LINES: Record<FindingCategory, readonly string[]> = {
 export interface SpecialistCardState {
   category: FindingCategory;
   status: SpecialistStatus;
-  elapsedMs: number;
+  startedAt?: number;
+  completedAt?: number;
   findingsCount?: number;
   topSeverity?: Severity;
   onClick?: () => void;
@@ -57,7 +59,8 @@ export interface SpecialistCardState {
 export function SpecialistCard({
   category,
   status,
-  elapsedMs,
+  startedAt,
+  completedAt,
   findingsCount,
   topSeverity,
   onClick,
@@ -67,6 +70,11 @@ export function SpecialistCard({
   const accentStyle: CSSProperties = {
     ["--accent-color" as string]: `var(--${meta.accentVar})`,
   };
+
+  // Live elapsed derived from server-reported timestamps. While running, the
+  // end point is "now" (ticked by the analyzer's 400ms interval); once done or
+  // failed, completedAt freezes it.
+  const elapsedMs = computeElapsed(status, startedAt, completedAt);
 
   const isInteractive = status === "done" && !!onClick;
 
@@ -87,11 +95,14 @@ export function SpecialistCard({
           : undefined
       }
       className={cn(
-        "group relative flex flex-col gap-3 overflow-hidden rounded-xl bg-card p-4 text-sm",
+        // No overflow-hidden here: the InfoBubble tooltip needs to escape the
+        // card bounds. The animated .roast-pulse and .roast-bar classes
+        // already set their own overflow:hidden in globals.css, so dropping
+        // the card-level clip doesn't let any animation bleed.
+        "group relative flex flex-col gap-3 rounded-xl bg-card p-4 text-sm",
         "ring-1 ring-foreground/10 transition-all",
-        status === "working" || status === "near-done"
-          ? "roast-pulse"
-          : undefined,
+        status === "working" ? "roast-pulse" : undefined,
+        status === "queued" && "opacity-80",
         status === "done" && "ring-[color:var(--accent-color)]/40",
         status === "error" && "opacity-70 ring-destructive/30",
         isInteractive && "cursor-pointer hover:ring-[color:var(--accent-color)]/70",
@@ -114,8 +125,9 @@ export function SpecialistCard({
             )}
           </span>
           <div className="flex flex-col leading-tight">
-            <span className="font-heading text-sm font-medium">
+            <span className="flex items-center gap-1.5 font-heading text-sm font-medium">
               {meta.shortLabel}
+              <InfoBubble text={SPECIALIST_TOOLTIP[category]} label={meta.label} />
             </span>
             <span className="text-[11px] text-muted-foreground">
               specialist
@@ -131,12 +143,9 @@ export function SpecialistCard({
 
       <div className="relative z-10 mt-auto">
         {status === "idle" ? <IdleFooter /> : null}
-        {status === "working" || status === "near-done" ? (
-          <WorkingFooter
-            category={category}
-            elapsedMs={elapsedMs}
-            intensified={status === "near-done"}
-          />
+        {status === "queued" ? <QueuedFooter /> : null}
+        {status === "working" ? (
+          <WorkingFooter category={category} elapsedMs={elapsedMs} />
         ) : null}
         {status === "done" ? (
           <DoneFooter
@@ -147,6 +156,49 @@ export function SpecialistCard({
         {status === "error" ? <ErrorFooter /> : null}
       </div>
     </div>
+  );
+}
+
+function computeElapsed(
+  status: SpecialistStatus,
+  startedAt?: number,
+  completedAt?: number,
+): number {
+  if (startedAt == null) return 0;
+  const end = completedAt ?? Date.now();
+  return Math.max(0, end - startedAt);
+}
+
+// Plain-language explanation of what this specialist does. CSS-only
+// hover/focus via Tailwind group variants — no popover library, no portal,
+// no JS state. Keyboard users get the same content on Tab-focus of the
+// button. Positioned below the trigger with z-20; the parent card drops its
+// overflow-hidden so the bubble can extend past card bounds.
+function InfoBubble({ text, label }: { text: string; label: string }) {
+  return (
+    <span className="group/info relative inline-flex">
+      <button
+        type="button"
+        aria-label={`About ${label} specialist`}
+        className={cn(
+          "inline-flex h-4 w-4 items-center justify-center rounded-full text-muted-foreground/60 transition-colors",
+          "hover:text-foreground focus-visible:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--accent-color)]/60",
+        )}
+      >
+        <Info className="h-3 w-3" />
+      </button>
+      <span
+        role="tooltip"
+        className={cn(
+          "pointer-events-none absolute left-0 top-full z-20 mt-1.5 w-56 rounded-md border border-border bg-popover p-2.5 text-[11px] font-normal normal-case leading-relaxed text-popover-foreground shadow-md",
+          "opacity-0 translate-y-1 transition-all duration-150",
+          "group-hover/info:pointer-events-auto group-hover/info:opacity-100 group-hover/info:translate-y-0",
+          "group-focus-within/info:pointer-events-auto group-focus-within/info:opacity-100 group-focus-within/info:translate-y-0",
+        )}
+      >
+        {text}
+      </span>
+    </span>
   );
 }
 
@@ -164,7 +216,14 @@ function StatusIndicator({
       </span>
     );
   }
-  if (status === "working" || status === "near-done") {
+  if (status === "queued") {
+    return (
+      <span className="text-[11px] uppercase tracking-wider text-muted-foreground/80">
+        queued
+      </span>
+    );
+  }
+  if (status === "working") {
     return (
       <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
         <span className="inline-block h-1.5 w-1.5 rounded-full roast-dot" />
@@ -178,7 +237,9 @@ function StatusIndicator({
     return (
       <span className="flex items-center gap-1 text-[11px] uppercase tracking-wider text-[color:var(--accent-color)]">
         <Check className="h-3 w-3" />
-        done
+        <span className="font-mono tabular-nums normal-case tracking-normal">
+          {(elapsedMs / 1000).toFixed(1)}s
+        </span>
       </span>
     );
   }
@@ -198,19 +259,28 @@ function IdleFooter() {
   );
 }
 
+function QueuedFooter() {
+  return (
+    <div className="flex items-center justify-between text-[11px] text-muted-foreground">
+      <span>Waiting for open slot…</span>
+      <span className="font-mono opacity-60">—</span>
+    </div>
+  );
+}
+
 function WorkingFooter({
   category,
   elapsedMs,
-  intensified,
 }: {
   category: FindingCategory;
   elapsedMs: number;
-  intensified: boolean;
 }) {
   const lines = WORKING_STATUS_LINES[category];
-  // Cycle through status lines at ~3s intervals; intensified near the end.
-  const interval = intensified ? 2000 : 3500;
-  const idx = Math.min(lines.length - 1, Math.floor(elapsedMs / interval));
+  // Cycle through status lines at ~3.5s intervals. These lines are
+  // illustrative of the real work the specialist is doing, but the card's
+  // completion is now driven by actual server events — no more theatrical
+  // "done" timer.
+  const idx = Math.min(lines.length - 1, Math.floor(elapsedMs / 3500));
   return (
     <div className="flex flex-col gap-2">
       <div className="roast-bar h-1" />

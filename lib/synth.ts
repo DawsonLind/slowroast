@@ -2,6 +2,7 @@ import { generateObject, NoObjectGeneratedError } from "ai";
 import { gateway } from "@ai-sdk/gateway";
 import { z } from "zod";
 import type { Finding, SpecialistOutput } from "@/lib/schemas";
+import type { SlowroastScore } from "@/lib/scoring";
 import { FindingWithValidatedFeatureSchema } from "@/lib/vercel-features";
 
 // Two schemas here — deliberate. The MODEL-FACING schema is permissive about
@@ -52,13 +53,22 @@ const INSTRUCTIONS = `You are the synthesizer in a multi-agent web-performance a
 ROLE
 You do not detect problems — the specialists already did. You prioritize, narrate, and select. You decide which finding is the single most important fix (topPriority) and which others round out the report.
 
+AUDIENCE & VOICE
+The reader is a technical engineering lead — comfortable with code and deploys, but not necessarily living in web-performance acronyms daily. Write so they get real value on a first read without a lookup table:
+- On first mention, expand each acronym in plain language. "Largest Contentful Paint (LCP, how fast the main content appears)", "Interaction to Next Paint (INP, how quickly the page responds to input)", "Cumulative Layout Shift (CLS, how much the layout jumps while loading)". Use the acronym alone on subsequent mentions in the same summary.
+- Prefer plain framing for other jargon on first use: say "blocking JavaScript that delays first paint" before or instead of "render-blocking scripts"; "time the page spends frozen on the main thread" instead of a bare "TBT" or "long tasks"; "making the React app interactive in the browser" instead of an unexplained "hydration cost".
+- Concrete numbers, real file names, and specific URLs are welcome — those land harder than adjectives. Keep marketing voice, hype, and vague claims ("massive wins", "dramatic improvements") out.
+
 PROCESS
 1. Read the URL and each specialist's findings + summary.
 2. Watch for a summary starting with "[specialist-failed]" — that lane could not run. Produce the report from the remaining lanes and explicitly mention the skipped lane(s) in executiveSummary. Do not invent findings for a failed specialist.
 3. Rank all surviving findings by impact × ease. Impact is the estimatedImpact field (favor critical/high severity with large ms or byte savings); ease is roughly the effort implied by the Vercel feature's typical fix (component swap > config change > architectural change).
 4. Pick topPriority: the single finding with the best impact-per-effort tradeoff. topPriority MUST also appear in findings[] — it is not a separate pool.
 5. Emit findings[] ordered by severity (critical → high → medium → opportunity), then by confidence within severity. Cap at 10.
-6. Write executiveSummary: 2–3 short paragraphs (not bullets). Paragraph 1: the overall picture — score posture, which lanes flagged real issues, any skipped lane. Paragraph 2: what the team should do first (the topPriority rationale) and the second-order wins behind it. Keep it concrete, data-grounded, no marketing voice.
+6. Write executiveSummary: 2–3 short paragraphs (not bullets). Paragraph 1: the overall picture — score posture, which specialist lanes flagged real issues, any skipped lane. Paragraph 2: what the team should do first (the topPriority rationale) and the second-order wins behind it. Optional paragraph 3: concrete next steps or caveats. Keep it concrete, data-grounded, and readable by someone who doesn't already speak fluent web-perf.
+
+SCORING FRAMING
+The prompt header includes a "Slowroast score" block when available — a gentler headline derived deterministically from the raw PageSpeed Insights performance score. When you reference a score in the executiveSummary, use the Slowroast score and its letter grade / band label from that header. Do NOT quote the raw PageSpeed Insights number in your summary — the UI renders it separately as a transparency footnote, so restating it mid-paragraph is redundant and makes the tone harsher than it needs to be. Specialist summaries still reference the raw PSI number; that's ground truth for their analysis and fine to cite as "the underlying Lighthouse signal," just don't put the bare "X/100" figure in the exec summary.
 
 CONSTRAINTS
 - Do NOT invent findings. Every finding in your output MUST originate from a specialist input.
@@ -123,6 +133,11 @@ export class SynthFailedError extends Error {
 
 export interface RunSynthOptions {
   signal?: AbortSignal;
+  // Optional Slowroast score to surface in the synth prompt header. When
+  // present, the synthesizer uses its curved number and grade in prose
+  // instead of the raw PSI figure. Pass undefined if PSI didn't yield a
+  // score — the prompt simply omits the block in that case.
+  slowroastScore?: SlowroastScore;
 }
 
 export async function runSynth(
@@ -131,7 +146,7 @@ export async function runSynth(
   opts: RunSynthOptions = {},
 ): Promise<SynthResult> {
   const attempts: SynthAttempt[] = [];
-  const prompt = buildSynthPrompt(url, outputs);
+  const prompt = buildSynthPrompt(url, outputs, opts.slowroastScore);
 
   for (let i = 1; i <= MAX_SYNTH_ATTEMPTS; i++) {
     if (opts.signal?.aborted) {
@@ -307,9 +322,22 @@ function errorMessage(err: unknown): string {
 export function buildSynthPrompt(
   url: string,
   outputs: SpecialistOutput[],
+  slowroastScore?: SlowroastScore,
 ): string {
   const lines: string[] = [];
   lines.push(`URL: ${url}`);
+  if (slowroastScore) {
+    // Header block the synth prompt's SCORING FRAMING section references.
+    // Rendered as a named block so Sonnet reliably picks it up rather than
+    // inlining raw PSI phrasing from the specialist summaries.
+    lines.push(
+      `Slowroast score: ${slowroastScore.score}/100 — grade ${slowroastScore.grade} ("${slowroastScore.band}")${
+        slowroastScore.psiRaw != null
+          ? ` (derived from raw PageSpeed Insights performance score ${slowroastScore.psiRaw}/100)`
+          : ""
+      }`,
+    );
+  }
   lines.push("");
   lines.push(
     `The four specialist outputs follow. Each block has a SUMMARY and a FINDINGS list. A summary prefixed "[specialist-failed]" means that lane could not complete — treat its findings as absent and name the skipped lane in executiveSummary.`,

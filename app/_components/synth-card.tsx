@@ -2,7 +2,7 @@
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
-import type { FindingCategory, Report } from "@/lib/schemas";
+import type { FindingCategory, Report, SlowroastScoreReport } from "@/lib/schemas";
 import { SPECIALIST_META, SPECIALIST_ORDER } from "@/lib/ui-meta";
 import { FindingCard } from "./finding-card";
 
@@ -158,25 +158,42 @@ function SynthBack({ status, report, errorMessage, errorKind, onRetry }: SynthCa
   }
 
   const topPriority = report.topPriority;
+  const score = report.slowroastScore;
 
   return (
     <div className="flex flex-col gap-4">
       <Card className="ring-2 ring-primary/30">
         <CardHeader>
-          <div className="flex items-center justify-between gap-3">
-            <div className="text-xs uppercase tracking-wider text-muted-foreground">
-              Executive summary · {hostFor(report.url)}
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex flex-col gap-1">
+              <div className="text-xs uppercase tracking-wider text-muted-foreground">
+                Executive summary · {hostFor(report.url)}
+              </div>
+              <CardTitle className="text-lg leading-snug">
+                Roadmap is ready.
+              </CardTitle>
+              {score ? (
+                <div className="text-xs text-muted-foreground">
+                  Slowroast grade:{" "}
+                  <span className="font-medium text-foreground/90">
+                    {score.band}
+                  </span>
+                </div>
+              ) : null}
             </div>
-            <span className="font-mono text-[11px] tabular-nums text-muted-foreground">
-              {report.findings.length} findings
-            </span>
+            {score ? <ScoreBadge score={score} /> : null}
           </div>
-          <CardTitle className="text-lg leading-snug">
-            Roadmap is ready.
-          </CardTitle>
         </CardHeader>
-        <CardContent>
+        <CardContent className="flex flex-col gap-3">
           <ExecutiveSummaryBody summary={report.executiveSummary} />
+          <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 border-t border-border/60 pt-2 font-mono text-[11px] tabular-nums text-muted-foreground">
+            <span>{report.findings.length} findings</span>
+            {score && score.psiRaw != null ? (
+              <span title="Unmodified PageSpeed Insights Lighthouse performance score">
+                PSI raw: {score.psiRaw}/100
+              </span>
+            ) : null}
+          </div>
         </CardContent>
       </Card>
 
@@ -291,6 +308,43 @@ function renderInlineMarkdown(text: string): React.ReactNode[] {
     else nodes.push(<code key={i} className="rounded bg-muted px-1 py-0.5 font-mono text-[0.85em]">{t.value}</code>);
   }
   return nodes;
+}
+
+// Headline score display. The grade letter is the eye-catch; the numeric
+// score is supporting detail. Color band is intentionally soft — the aim is
+// "encouraging, honest" not "traffic light". Tone derives from the grade
+// rather than a raw numeric cutoff so the visual and text labels stay in sync.
+const GRADE_TONE: Record<
+  SlowroastScoreReport["grade"],
+  { ring: string; text: string; bg: string }
+> = {
+  "A+": { ring: "ring-emerald-500/40", text: "text-emerald-600 dark:text-emerald-400", bg: "bg-emerald-500/10" },
+  A: { ring: "ring-emerald-500/30", text: "text-emerald-600 dark:text-emerald-400", bg: "bg-emerald-500/10" },
+  B: { ring: "ring-sky-500/30", text: "text-sky-600 dark:text-sky-400", bg: "bg-sky-500/10" },
+  C: { ring: "ring-amber-500/30", text: "text-amber-600 dark:text-amber-400", bg: "bg-amber-500/10" },
+  D: { ring: "ring-orange-500/30", text: "text-orange-600 dark:text-orange-400", bg: "bg-orange-500/10" },
+  F: { ring: "ring-rose-500/30", text: "text-rose-600 dark:text-rose-400", bg: "bg-rose-500/10" },
+};
+
+function ScoreBadge({ score }: { score: SlowroastScoreReport }) {
+  const tone = GRADE_TONE[score.grade];
+  return (
+    <div
+      className={cn(
+        "flex flex-col items-center justify-center rounded-xl px-3 py-2 ring-1",
+        tone.ring,
+        tone.bg,
+      )}
+      aria-label={`Slowroast grade ${score.grade}, score ${score.score} out of 100, ${score.band}`}
+    >
+      <span className={cn("font-mono text-3xl font-semibold leading-none", tone.text)}>
+        {score.grade}
+      </span>
+      <span className="mt-1 font-mono text-[11px] tabular-nums text-muted-foreground">
+        {score.score}/100
+      </span>
+    </div>
+  );
 }
 
 function hostFor(url: string): string {

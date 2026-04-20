@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import { z } from "zod";
 import { runAnalysis, PipelineError } from "@/lib/pipeline";
+import type { ProgressEvent } from "@/lib/progress-events";
 
 // Node is the default runtime (Cache Components doesn't support Edge, and our
 // PSI/HTML fetch + Node SDKs expect Node). Under `cacheComponents: true`, the
@@ -43,40 +44,53 @@ export async function POST(req: NextRequest): Promise<Response> {
     );
   }
 
-  try {
-    const result = await runAnalysis(parsedBody.url, { signal: req.signal });
-    return Response.json(result);
-  } catch (err) {
-    if (err instanceof PipelineError) {
-      return Response.json(
-        { error: err.kind, message: err.message },
-        { status: statusForPipelineError(err.kind) },
-      );
-    }
-    console.error("[api/analyze] unexpected error:", err);
-    return Response.json(
-      { error: "internal", message: errorMessage(err) },
-      { status: 500 },
-    );
-  }
-}
+  // Stream progress events as newline-delimited JSON. Once the stream is
+  // open we always return HTTP 200 and surface pipeline errors as in-band
+  // {type: "error"} events — flipping the HTTP status mid-stream isn't
+  // possible, and matching status codes to partial failures is an exercise
+  // the client doesn't need. Body-validation errors above stay JSON / 400.
+  const encoder = new TextEncoder();
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      const write = (event: ProgressEvent) => {
+        controller.enqueue(encoder.encode(JSON.stringify(event) + "\n"));
+      };
 
-function statusForPipelineError(kind: PipelineError["kind"]): number {
-  switch (kind) {
-    // Upstream data source failure — 502 is the conventional "bad gateway"
-    // signal, preserved so clients can distinguish it from our own bugs.
-    case "psi":
-      return 502;
-    // All four specialists failed — model gateway is effectively down for us.
-    case "all_specialists_failed":
-    case "synth":
-      return 502;
-    // Caller disconnect — 499 in nginx-world, 408 as a standard-ish fallback.
-    case "aborted":
-      return 499;
-    default:
-      return 500;
-  }
+      (async () => {
+        try {
+          const result = await runAnalysis(parsedBody.url, {
+            signal: req.signal,
+            onEvent: write,
+          });
+          write({ type: "result", result });
+        } catch (err) {
+          if (err instanceof PipelineError) {
+            write({ type: "error", kind: err.kind, message: err.message });
+          } else {
+            console.error("[api/analyze] unexpected error:", err);
+            write({
+              type: "error",
+              kind: "internal",
+              message: errorMessage(err),
+            });
+          }
+        } finally {
+          controller.close();
+        }
+      })();
+    },
+  });
+
+  return new Response(stream, {
+    status: 200,
+    headers: {
+      "Content-Type": "application/x-ndjson; charset=utf-8",
+      // Proxies/CDNs will happily buffer a streaming body; this hint tells
+      // them not to. Vercel's platform honors it.
+      "Cache-Control": "no-cache, no-transform",
+      "X-Accel-Buffering": "no",
+    },
+  });
 }
 
 function errorMessage(err: unknown): string {

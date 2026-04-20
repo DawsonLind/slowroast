@@ -8,15 +8,17 @@ export interface SpecialistViewState {
   status: SpecialistStatus;
   findingsCount?: number;
   topSeverity?: Severity;
+  // Wall-clock timestamps driven by real server-side events. The card uses
+  // these to render elapsed time without relying on a client-wide ticker.
+  startedAt?: number;
+  completedAt?: number;
 }
 
 export function SpecialistGrid({
   states,
-  elapsedMs,
   onCardClick,
 }: {
   states: Record<FindingCategory, SpecialistViewState>;
-  elapsedMs: number;
   onCardClick?: (category: FindingCategory) => void;
 }) {
   return (
@@ -28,7 +30,8 @@ export function SpecialistGrid({
             key={category}
             category={category}
             status={s.status}
-            elapsedMs={elapsedMs}
+            startedAt={s.startedAt}
+            completedAt={s.completedAt}
             findingsCount={s.findingsCount}
             topSeverity={s.topSeverity}
             onClick={

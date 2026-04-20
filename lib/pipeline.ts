@@ -12,11 +12,15 @@ import { runBundleSpecialist } from "@/lib/agents/bundle";
 import { runCacheSpecialist } from "@/lib/agents/cache";
 import { runCwvSpecialist } from "@/lib/agents/cwv";
 import { runSynth, SynthFailedError, type SynthAttempt } from "@/lib/synth";
+import { computeSlowroastScore } from "@/lib/scoring";
 import type {
+  Finding,
   FindingCategory,
   Report,
+  Severity,
   SpecialistOutput,
 } from "@/lib/schemas";
+import type { ProgressEvent } from "@/lib/progress-events";
 
 export type { SynthAttempt } from "@/lib/synth";
 
@@ -135,6 +139,11 @@ export interface RunAnalysisOptions {
   // currently runs with 150s to record the natural distribution without
   // truncation.
   synthTimeoutMs?: number;
+  // Optional progress sink. The API route uses this to forward lifecycle
+  // events over NDJSON to the browser so the loading UI reflects real work
+  // instead of a hardcoded client-side timer. Non-route callers (eval harness,
+  // scripts/test-pipeline.ts) leave it unset and the emits are no-ops.
+  onEvent?: (event: ProgressEvent) => void;
 }
 
 export async function runAnalysis(
@@ -143,17 +152,43 @@ export async function runAnalysis(
 ): Promise<AnalysisResult> {
   throwIfAborted(opts.signal);
 
+  const emit = opts.onEvent ?? (() => {});
   const totalStartedAt = Date.now();
 
   // Phase 1: deterministic data collection. PSI enforces its own 60s cap;
   // fetchHtml is 10s. Both accept AbortSignal so caller disconnects win.
+  // Each fetch gets its own timing/emit so the UI can light up the HTML card
+  // independently of the slower PSI call.
   const psiStartedAt = Date.now();
+  emit({ type: "phase", phase: "psi", status: "start" });
+  emit({ type: "phase", phase: "html", status: "start" });
+  const psiPromise = fetchPsi(url, {
+    signal: opts.signal,
+    timeoutMs: opts.psiTimeoutMs,
+  }).then(
+    (r) => {
+      emit({
+        type: "phase",
+        phase: "psi",
+        status: "done",
+        durationMs: Date.now() - psiStartedAt,
+      });
+      return r;
+    },
+  );
+  const htmlStartedAt = psiStartedAt;
+  const htmlPromise = fetchHtml(url, { signal: opts.signal }).then((r) => {
+    emit({
+      type: "phase",
+      phase: "html",
+      status: "done",
+      durationMs: Date.now() - htmlStartedAt,
+    });
+    return r;
+  });
   let psi, htmlResult;
   try {
-    [psi, htmlResult] = await Promise.all([
-      fetchPsi(url, { signal: opts.signal, timeoutMs: opts.psiTimeoutMs }),
-      fetchHtml(url, { signal: opts.signal }),
-    ]);
+    [psi, htmlResult] = await Promise.all([psiPromise, htmlPromise]);
   } catch (err) {
     if (err instanceof PsiError) {
       console.error(
@@ -178,12 +213,28 @@ export async function runAnalysis(
   const cacheSlice = extractCacheSlice(psi, htmlResult);
   const cwvSlice = extractCwvSlice(psi, htmlResult, assets);
 
+  // Emit "queued" for all four the moment we hand them to p-limit. Two will
+  // flip to "running" immediately (p-limit(2)); the other two sit queued for
+  // a beat, which the UI shows honestly instead of pretending all four
+  // started at once.
+  for (const cat of ["image", "bundle", "cache", "cwv"] as const) {
+    emit({ type: "specialist", category: cat, status: "queued" });
+  }
+
   const specialistPhaseStartedAt = Date.now();
   const wrapped = await Promise.all([
-    specialistLimit(() => wrapSpecialist("image", () => runImageSpecialist(imageSlice))),
-    specialistLimit(() => wrapSpecialist("bundle", () => runBundleSpecialist(bundleSlice))),
-    specialistLimit(() => wrapSpecialist("cache", () => runCacheSpecialist(cacheSlice))),
-    specialistLimit(() => wrapSpecialist("cwv", () => runCwvSpecialist(cwvSlice))),
+    specialistLimit(() =>
+      wrapSpecialist("image", () => runImageSpecialist(imageSlice), emit),
+    ),
+    specialistLimit(() =>
+      wrapSpecialist("bundle", () => runBundleSpecialist(bundleSlice), emit),
+    ),
+    specialistLimit(() =>
+      wrapSpecialist("cache", () => runCacheSpecialist(cacheSlice), emit),
+    ),
+    specialistLimit(() =>
+      wrapSpecialist("cwv", () => runCwvSpecialist(cwvSlice), emit),
+    ),
   ]);
   const specialistPhaseMs = Date.now() - specialistPhaseStartedAt;
   const outputs = wrapped.map((w) => w.output);
@@ -217,10 +268,22 @@ export async function runAnalysis(
     ? AbortSignal.any([opts.signal, synthController.signal])
     : synthController.signal;
 
+  // Compute the curved Slowroast score from the raw PSI performance score.
+  // Passed into runSynth so Sonnet frames the executive summary around it
+  // rather than the harsher PSI figure, and stamped onto the Report below so
+  // the UI can render a grade badge without re-deriving.
+  const slowroastScore = computeSlowroastScore(
+    psi.categories.performance.score,
+  );
+
   const synthStartedAt = Date.now();
+  emit({ type: "synth", status: "start" });
   let synthResult;
   try {
-    synthResult = await runSynth(url, outputs, { signal: synthSignal });
+    synthResult = await runSynth(url, outputs, {
+      signal: synthSignal,
+      slowroastScore: slowroastScore ?? undefined,
+    });
   } catch (err) {
     const synthElapsed = Date.now() - synthStartedAt;
     // SynthFailedError carries the per-attempt history. Whether we got here
@@ -262,6 +325,7 @@ export async function runAnalysis(
   const synthOutput = synthResult.output;
   const synthAttempts = synthResult.attempts;
   const synthMs = Date.now() - synthStartedAt;
+  emit({ type: "synth", status: "done", durationMs: synthMs });
   const retryCount = synthAttempts.length - 1;
   console.error(
     `[pipeline] synth phase ok in ${synthMs}ms (attempts=${synthAttempts.length}${retryCount > 0 ? `, recovered-from-${retryCount}-failures` : ""})`,
@@ -271,6 +335,7 @@ export async function runAnalysis(
     url: psi.finalUrl,
     generatedAt: new Date().toISOString(),
     executiveSummary: synthOutput.executiveSummary,
+    slowroastScore: slowroastScore ?? undefined,
     topPriority: synthOutput.topPriority,
     findings: synthOutput.findings,
     relatedFindings: synthOutput.relatedFindings,
@@ -311,6 +376,7 @@ interface WrappedSpecialist {
 async function wrapSpecialist(
   category: FindingCategory,
   run: () => Promise<SpecialistOutput>,
+  emit: (event: ProgressEvent) => void,
 ): Promise<WrappedSpecialist> {
   let timer: ReturnType<typeof setTimeout> | null = null;
   const timeout = new Promise<never>((_, reject) => {
@@ -320,12 +386,21 @@ async function wrapSpecialist(
   });
 
   const startedAt = Date.now();
+  emit({ type: "specialist", category, status: "running" });
   try {
     const result = await Promise.race([run(), timeout]);
     const elapsedMs = Date.now() - startedAt;
     console.error(
       `[pipeline] ${category} specialist ok in ${elapsedMs}ms`,
     );
+    emit({
+      type: "specialist",
+      category,
+      status: "done",
+      durationMs: elapsedMs,
+      findingsCount: result.findings.length,
+      topSeverity: worstSeverity(result.findings),
+    });
     return { output: result, elapsedMs };
   } catch (err) {
     const reason = errorMessage(err);
@@ -333,6 +408,12 @@ async function wrapSpecialist(
     console.error(
       `[pipeline] ${category} specialist failed after ${elapsedMs}ms; degrading lane: ${reason}`,
     );
+    emit({
+      type: "specialist",
+      category,
+      status: "failed",
+      durationMs: elapsedMs,
+    });
     return {
       output: {
         specialist: category,
@@ -344,6 +425,22 @@ async function wrapSpecialist(
   } finally {
     if (timer != null) clearTimeout(timer);
   }
+}
+
+const SEVERITY_RANK: Record<Severity, number> = {
+  critical: 3,
+  high: 2,
+  medium: 1,
+  opportunity: 0,
+};
+
+function worstSeverity(items: Finding[]): Severity | undefined {
+  if (items.length === 0) return undefined;
+  let worst: Severity = items[0].severity;
+  for (const f of items) {
+    if (SEVERITY_RANK[f.severity] > SEVERITY_RANK[worst]) worst = f.severity;
+  }
+  return worst;
 }
 
 function throwIfAborted(signal?: AbortSignal): void {

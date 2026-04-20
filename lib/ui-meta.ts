@@ -69,15 +69,18 @@ export const SPECIALIST_ORDER: readonly FindingCategory[] = [
   "cwv",
 ];
 
-// Observed timings from evals/results.json vercel.com run, used to drive
-// the theater-progress windows in the analyzer. These are the "when would
-// the real work be done" anchors for each lane under the p-limit(2) wave
-// pattern (image+cache in wave 1, bundle+cwv in wave 2).
-export const SPECIALIST_DONE_AT_MS: Record<FindingCategory, number> = {
-  image: 9_000,
-  cache: 13_000,
-  cwv: 15_000,
-  bundle: 16_000,
+// Hover-bubble copy on each specialist card. The card's short `description`
+// is a tags-style summary for someone who already knows the domain; these
+// are the plain-language version for someone who wants to know what "CWV"
+// or "bundle" actually means. Shown via the InfoBubble next to the card
+// header.
+export const SPECIALIST_TOOLTIP: Record<FindingCategory, string> = {
+  image:
+    "Checks how images are served — size, format, priority hints, and whether they use Vercel's next/image optimization. Oversized or unoptimized images are a top cause of slow first paint.",
+  bundle:
+    "Inspects the JavaScript shipped to the browser — render-blocking scripts, third-party tags, and how code is split. Heavy bundles delay when the page becomes interactive.",
+  cache:
+    "Reviews how responses are cached at the CDN edge and in the browser. Missing or weak cache headers force repeat visits to re-download assets that never changed.",
+  cwv:
+    "Core Web Vitals are Google's three headline page-experience metrics: how fast the main content appears (LCP), how quickly the page responds to input (INP), and how much the layout shifts as it loads (CLS). They feed into SEO rankings.",
 };
-
-export const SYNTH_START_AT_MS = 16_000;

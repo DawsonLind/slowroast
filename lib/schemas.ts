@@ -42,10 +42,25 @@ export const SpecialistOutputSchema = z.object({
 });
 export type SpecialistOutput = z.infer<typeof SpecialistOutputSchema>;
 
+// Report-level Slowroast score. Derived deterministically from the raw PSI
+// performance score by lib/scoring.ts — stamped in code, not emitted by the
+// synthesizer. Optional because null PSI scores (rare, happens on extreme
+// failures) produce no score at all rather than a misleading zero.
+export const SlowroastScoreSchema = z.object({
+  score: z.number().min(0).max(100),
+  grade: z.enum(["A+", "A", "B", "C", "D", "F"]),
+  band: z.string().min(1),
+  psiRaw: z.number().min(0).max(100).nullable(),
+});
+export type SlowroastScoreReport = z.infer<typeof SlowroastScoreSchema>;
+
 export const ReportSchema = z.object({
   url: z.string().url(),
   generatedAt: z.string().datetime(),
   executiveSummary: z.string(),
+  // Gentler headline score + letter grade. See lib/scoring.ts for the curve.
+  // Optional so a null PSI performance score doesn't break the report shape.
+  slowroastScore: SlowroastScoreSchema.optional(),
   // Optional: a well-cached well-built site can legitimately produce zero
   // findings. The synthesizer emits topPriority only when `findings` is
   // non-empty; downstream UI renders a "no issues found" branch otherwise.
