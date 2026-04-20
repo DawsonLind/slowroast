@@ -22,7 +22,7 @@ export default function Home() {
             Paste a URL. Four specialist agents fan out in parallel across
             PageSpeed Insights and raw HTML, then a synthesizer ranks their
             findings by impact × ease. Every recommendation is grounded in a
-            curated Vercel feature catalog — no hallucinated fixes.
+            curated Vercel feature catalog - no hallucinated fixes.
           </p>
         </section>
 
