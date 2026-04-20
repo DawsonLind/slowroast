@@ -1,12 +1,18 @@
 import Link from "next/link";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
-import { unstable_cacheTag as cacheTag } from "next/cache";
+import { cacheTag } from "next/cache";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 import { getVercelFeatureById } from "@/lib/vercel-features";
 import type { Finding, FindingCategory } from "@/lib/schemas";
 import type { PhaseTimings } from "@/lib/pipeline";
+import { BrandMark } from "../_components/brand-mark";
+import { KpiTile } from "../_components/kpi-tile";
+import {
+  SuccessRateChart,
+  type SuccessRateRow,
+} from "../_components/success-rate-chart";
 
 // ---------------------------------------------------------------------------
 // Schema mirrors scripts/eval.ts's ResultsFile. Server-side read only — we
@@ -146,12 +152,13 @@ export default async function EvalsPage() {
         <div className="mx-auto flex w-full max-w-6xl items-center justify-between px-6 py-4">
           <Link
             href="/"
-            className="flex items-baseline gap-2 rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            className="flex items-center gap-2 rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
+            <BrandMark />
             <span className="font-heading text-lg font-semibold tracking-tight">
               Slowroast
             </span>
-            <span className="text-xs text-muted-foreground">
+            <span className="hidden text-xs text-muted-foreground sm:inline">
               eval dashboard
             </span>
           </Link>
@@ -224,7 +231,7 @@ function ResultsContent({ results }: { results: ResultsFile }) {
   const { meta, urls } = results;
   const successRate = meta.runsAttempted === 0
     ? 0
-    : Math.round((meta.runsSucceeded / meta.runsAttempted) * 100);
+    : (meta.runsSucceeded / meta.runsAttempted) * 100;
 
   const successfulUrls = urls.filter((u) => u.aggregates.successfulRuns > 0);
   const consistentTopPriority = successfulUrls.filter(
@@ -232,26 +239,71 @@ function ResultsContent({ results }: { results: ResultsFile }) {
   ).length;
   const consistencyRate = successfulUrls.length === 0
     ? 0
-    : Math.round((consistentTopPriority / successfulUrls.length) * 100);
+    : (consistentTopPriority / successfulUrls.length) * 100;
 
   const aggregatePhases = aggregatePhaseTimings(urls);
+  const uniqueFeaturesHit = countUniqueFeaturesHit(urls);
+
+  const successRows: SuccessRateRow[] = urls.map((u) => ({
+    url: u.url,
+    host: hostFor(u.url),
+    successful: u.aggregates.successfulRuns,
+    attempted: u.aggregates.successfulRuns + u.aggregates.failedRuns,
+  }));
 
   return (
     <div className="flex flex-col gap-8">
-      <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <Stat label="Runs succeeded" value={`${meta.runsSucceeded} / ${meta.runsAttempted}`} sub={`${successRate}% success`} />
-        <Stat label="URLs analyzed" value={`${urls.length}`} sub={`${meta.runsPerUrl} runs each`} />
-        <Stat
-          label="Top-priority stable"
-          value={`${consistentTopPriority} / ${successfulUrls.length}`}
-          sub={`${consistencyRate}% of URLs w/ ≥1 success`}
+      <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
+        <KpiTile
+          label="Success rate"
+          value={successRate}
+          format="percent"
+          accent={successRate > 80 ? "positive" : successRate >= 40 ? "primary" : "neutral"}
+          sub={`${meta.runsSucceeded} of ${meta.runsAttempted} runs`}
         />
-        <Stat
-          label="End-to-end p50 / max"
-          value={`${fmtS(aggregatePhases.total.p50)} / ${fmtS(aggregatePhases.total.max)}`}
-          sub={`across ${aggregatePhases.total.count} successful runs`}
+        <KpiTile
+          label="URLs analyzed"
+          value={urls.length}
+          format="int"
+          accent="cache"
+          sub={`${meta.runsPerUrl} runs each`}
+        />
+        <KpiTile
+          label="Top-priority stable"
+          value={consistencyRate}
+          format="percent"
+          accent={consistencyRate > 80 ? "positive" : "primary"}
+          sub={`${consistentTopPriority} of ${successfulUrls.length} URLs agree`}
+        />
+        <KpiTile
+          label="End-to-end p50"
+          value={aggregatePhases.total.p50 / 1000}
+          format="seconds"
+          accent="primary"
+          sub={`max ${fmtS(aggregatePhases.total.max)} · ${aggregatePhases.total.count} runs`}
+        />
+        <KpiTile
+          label="Catalog features hit"
+          value={uniqueFeaturesHit}
+          format="int"
+          accent="cwv"
+          sub="distinct Vercel recommendations produced"
         />
       </section>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Success rate per URL</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <SuccessRateChart rows={successRows} />
+          <div className="mt-3 flex flex-wrap items-center gap-4 text-[11px] text-muted-foreground">
+            <LegendSwatch color="var(--color-roast-positive)" label=">80%" />
+            <LegendSwatch color="var(--color-sev-medium)" label="40–80%" />
+            <LegendSwatch color="var(--color-sev-critical)" label="<40%" />
+          </div>
+        </CardContent>
+      </Card>
 
       <Card>
         <CardHeader>
@@ -311,62 +363,74 @@ function ResultsContent({ results }: { results: ResultsFile }) {
   );
 }
 
-function Stat({ label, value, sub }: { label: string; value: string; sub?: string }) {
+function LegendSwatch({ color, label }: { color: string; label: string }) {
   return (
-    <Card>
-      <CardContent className="flex flex-col gap-1 py-4">
-        <div className="text-xs uppercase tracking-wider text-muted-foreground">
-          {label}
-        </div>
-        <div className="text-2xl font-semibold tabular-nums">{value}</div>
-        {sub ? <div className="text-xs text-muted-foreground">{sub}</div> : null}
-      </CardContent>
-    </Card>
+    <span className="flex items-center gap-1.5">
+      <span
+        className="inline-block h-2 w-4 rounded-sm"
+        style={{ backgroundColor: color }}
+        aria-hidden
+      />
+      <span>{label}</span>
+    </span>
   );
+}
+
+function countUniqueFeaturesHit(urls: UrlRecord[]): number {
+  const set = new Set<string>();
+  for (const u of urls) {
+    for (const id of u.aggregates.uniqueCatalogFeatures) set.add(id);
+  }
+  return set.size;
 }
 
 function UrlRow({ record }: { record: UrlRecord }) {
   const { url, runs, aggregates } = record;
   const consistency = aggregates.topPriorityConsistency;
-  const consistencyLabel = describeConsistency(consistency);
+  const stability = describeTopPriorityStability(consistency);
   const allIds = consistency.ids;
-  const hasAnyError = aggregates.failedRuns > 0;
+  const totalRuns = aggregates.successfulRuns + aggregates.failedRuns;
+  const allSuccessful = aggregates.failedRuns === 0 && aggregates.successfulRuns > 0;
+  const allFailed = aggregates.successfulRuns === 0 && aggregates.failedRuns > 0;
 
   return (
     <details className="group rounded-xl bg-card ring-1 ring-foreground/10 open:ring-foreground/20">
       <summary className="flex cursor-pointer list-none flex-col gap-2 px-4 py-3 sm:flex-row sm:items-center sm:gap-4">
         <div className="flex min-w-0 flex-1 items-center gap-3">
-          <span className="text-muted-foreground text-xs tabular-nums">
-            {runs.map((r) => (r.status === "success" ? "✓" : "✗")).join("")}
+          <span
+            className={cn(
+              "inline-flex items-center rounded-full px-2 py-0.5 text-[11px] tabular-nums font-medium",
+              allSuccessful
+                ? "bg-[color:var(--color-roast-positive)]/15 text-[color:var(--color-roast-positive)]"
+                : allFailed
+                  ? "bg-destructive/10 text-destructive"
+                  : "bg-sev-medium/15 text-sev-medium",
+            )}
+            title="Successful runs / total runs"
+          >
+            {aggregates.successfulRuns}/{totalRuns} runs
           </span>
           <span className="font-mono text-sm font-medium truncate">{hostFor(url)}</span>
           <span className="hidden text-xs text-muted-foreground sm:inline">{url}</span>
         </div>
         <div className="flex flex-wrap items-center gap-2 text-xs">
           <span
-            className={cn(
-              "rounded-full px-2 py-0.5",
-              consistencyLabel.cls,
-            )}
+            className={cn("rounded-full px-2 py-0.5", stability.cls)}
+            title="Top-priority stability across runs — whether the synth flagged the same top issue each time"
           >
-            {consistencyLabel.label}
+            {stability.label}
           </span>
           <span className="rounded-full bg-muted px-2 py-0.5 text-muted-foreground tabular-nums">
             {fmtS(aggregates.phaseTimings.total.p50)} p50
           </span>
           {aggregates.htmlBlockedAnyRun ? (
-            <span className="rounded-full bg-yellow-500/10 px-2 py-0.5 text-yellow-700 dark:text-yellow-400">
+            <span className="rounded-full bg-sev-medium/15 px-2 py-0.5 text-sev-medium">
               html-blocked
             </span>
           ) : null}
           {aggregates.degradedSpecialistsUnion.length > 0 ? (
-            <span className="rounded-full bg-yellow-500/10 px-2 py-0.5 text-yellow-700 dark:text-yellow-400">
+            <span className="rounded-full bg-sev-medium/15 px-2 py-0.5 text-sev-medium">
               degraded: {aggregates.degradedSpecialistsUnion.join(", ")}
-            </span>
-          ) : null}
-          {hasAnyError ? (
-            <span className="rounded-full bg-destructive/10 px-2 py-0.5 text-destructive">
-              {aggregates.failedRuns} fail
             </span>
           ) : null}
         </div>
@@ -616,35 +680,40 @@ function aggregatePhaseTimings(urls: UrlRecord[]): CrossRunPhases {
   };
 }
 
-interface ConsistencyLabel {
+interface StabilityLabel {
   label: string;
   cls: string;
 }
 
-function describeConsistency(
+// Describes the stability of top-priority across runs. This is *not* a
+// pass/fail signal — an unstable top priority on three successful runs still
+// means the pipeline worked; it just means the synth's ranking is sensitive
+// to variance. Keep these colors amber/muted, not destructive, so the row
+// doesn't read as "failed" when the underlying runs are green.
+function describeTopPriorityStability(
   consistency: UrlAggregates["topPriorityConsistency"],
-): ConsistencyLabel {
+): StabilityLabel {
   if (consistency.ids.length === 0) {
     return {
-      label: "no successful runs",
-      cls: "bg-destructive/10 text-destructive",
+      label: "top-priority n/a",
+      cls: "bg-muted text-muted-foreground",
     };
   }
   if (consistency.allSameId === true) {
     return {
-      label: `✓ ${consistency.ids.length}/${consistency.ids.length} agree`,
-      cls: "bg-emerald-500/10 text-emerald-700 dark:text-emerald-400",
+      label: `top-priority ✓ stable (${consistency.ids.length}/${consistency.ids.length})`,
+      cls: "bg-[color:var(--color-roast-positive)]/15 text-[color:var(--color-roast-positive)]",
     };
   }
   if (consistency.uniqueIdCount === 2) {
     return {
-      label: `⚠ ${consistency.ids.length - 1}/${consistency.ids.length} majority`,
-      cls: "bg-yellow-500/10 text-yellow-700 dark:text-yellow-400",
+      label: `top-priority ⚠ drift (${consistency.ids.length - 1}/${consistency.ids.length} majority)`,
+      cls: "bg-sev-medium/15 text-sev-medium",
     };
   }
   return {
-    label: `✗ ${consistency.uniqueIdCount} distinct`,
-    cls: "bg-destructive/10 text-destructive",
+    label: `top-priority ⚠ unstable (${consistency.uniqueIdCount} distinct)`,
+    cls: "bg-sev-medium/15 text-sev-medium",
   };
 }
 

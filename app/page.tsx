@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { Analyzer } from "./_components/analyzer";
+import { BrandMark } from "./_components/brand-mark";
 
 // PPR under cacheComponents: the page shell is fully static (no dynamic APIs,
 // no uncached awaits), so Next.js prerenders it at build time. The Analyzer is
@@ -39,12 +40,13 @@ function SiteHeader() {
       <div className="mx-auto flex w-full max-w-5xl items-center justify-between px-6 py-4">
         <Link
           href="/"
-          className="flex items-baseline gap-2 rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          className="flex items-center gap-2 rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
+          <BrandMark />
           <span className="font-heading text-lg font-semibold tracking-tight">
             Slowroast
           </span>
-          <span className="text-xs text-muted-foreground">
+          <span className="hidden text-xs text-muted-foreground sm:inline">
             multi-agent web perf analyzer
           </span>
         </Link>
