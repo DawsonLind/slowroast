@@ -94,14 +94,13 @@ export interface PhaseTimings {
   bundleMs: number;
   cacheMs: number;
   cwvMs: number;
-  // Wall-clock of the entire specialist phase (Promise.all on all four
-  // wrapped specialist calls). With p-limit(2) this is ≈ 2× the typical
-  // per-specialist time.
+  // wall-clock across all four wrapped specialist calls (Promise.all). with
+  // p-limit(2) this lands around 2x the typical per-specialist time
   specialistPhaseMs: number;
-  // Wall-clock of the generateObject synth call.
+  // wall-clock of the generateObject synth call
   synthMs: number;
-  // End-to-end runAnalysis wall-clock (includes tiny amounts of HTML parsing
-  // and slice extraction between phases).
+  // end-to-end runAnalysis wall-clock. includes the small bits of HTML
+  // parsing and slice extraction between phases
   totalMs: number;
 }
 
@@ -141,9 +140,10 @@ export async function runAnalysis(
   const emit = opts.onEvent ?? (() => {});
   const totalStartedAt = Date.now();
 
-  // phase 1: deterministic data collection. PSI has its own 60s cap, fetchHtml
-  // is 10s. both honor AbortSignal so caller disconnects win. each fetch emits
-  // independently so the UI can light up the HTML side without waiting on PSI
+  // phase 1: deterministic data collection. PSI has its own 60s cap,
+  // fetchHtml is 10s. both honor AbortSignal so caller disconnects win
+  // immediately. each fetch emits its own lifecycle events so the UI can
+  // light up the HTML side without waiting on the slower PSI call.
   const psiStartedAt = Date.now();
   emit({ type: "phase", phase: "psi", status: "start" });
   emit({ type: "phase", phase: "html", status: "start" });
@@ -189,10 +189,11 @@ export async function runAnalysis(
   const assets = htmlResult.html ? parseHtmlForAssets(htmlResult.html) : EMPTY_ASSETS;
   throwIfAborted(opts.signal);
 
-  // Phase 2: parallel specialist fan-out. Each specialist gets wrapped so its
-  // rejection or timeout becomes a degraded SpecialistOutput — the whole
-  // report should not fail because one lane crashed. The existing specialists
-  // don't accept an AbortSignal, so we enforce the phase cap via Promise.race.
+  // phase 2: specialists fan out in parallel. each one is wrapped so a
+  // rejection or timeout turns into a degraded SpecialistOutput - one bad
+  // lane should never kill the whole report. specialists dont accept an
+  // AbortSignal themselves, so the phase cap is enforced via Promise.race
+  // inside wrapSpecialist below.
   const imageSlice = extractImageSlice(psi, htmlResult, assets);
   const bundleSlice = extractBundleSlice(psi, htmlResult, assets);
   const cacheSlice = extractCacheSlice(psi, htmlResult);

@@ -6,12 +6,13 @@ import {
   type VercelFeature,
 } from "@/lib/schemas";
 
-// The catalog is the "no hallucinated recommendations" guarantee in source
-// form. Specialists can only surface a Vercel feature that lives here; the
-// Zod refinement on FindingWithValidatedFeatureSchema makes that mechanical.
+// this catalog IS the "no hallucinated recommendations" guarantee, in source
+// form. specialists can only surface a vercel feature that lives in here -
+// the zod refinement on FindingWithValidatedFeatureSchema below makes that
+// mechanical, not advisory.
 //
-// URLs must point at real Vercel / Next.js docs. Any drift surfaces via the
-// `scripts/check-catalog-urls.sh`-style smoke check run at the end of Day 1.
+// urls must point at real vercel / next.js docs. any drift gets caught by
+// the catalog-URL smoke check under scripts/.
 
 const catalogEntries = [
   {
@@ -181,8 +182,8 @@ const catalogEntries = [
   },
 ] as const;
 
-// Validate at module load — a bad entry is a build-time bug, not a runtime
-// surprise at agent-call time.
+// validated at module load - a bad catalog entry should be a build-time bug,
+// not a runtime surprise that breaks a user's analysis.
 export const VERCEL_FEATURES: readonly VercelFeature[] = catalogEntries.map(
   (entry) => VercelFeatureSchema.parse(entry),
 );
@@ -196,8 +197,8 @@ const VERCEL_FEATURE_ID_ENUM = z.enum(
   catalogEntries.map((e) => e.id) as [VercelFeatureId, ...VercelFeatureId[]],
 );
 
-// Strict variant — use at synthesis, eval, and any boundary where we want to
-// reject findings that reference a feature not in the catalog.
+// strict variant. use this at synthesis, eval, and any boundary where a
+// finding pointing at an unknown feature should be a hard reject.
 export const FindingWithValidatedFeatureSchema = FindingSchema.extend({
   vercelFeatureId: VERCEL_FEATURE_ID_ENUM,
 });
@@ -213,10 +214,11 @@ export function getVercelFeatureById(id: string): VercelFeature | undefined {
   return featuresById.get(id);
 }
 
-// Deterministic keyword match over the `when` and `category` fields. No
-// fuzzy/embedding search on Day 1 — if the agent's concern doesn't match, we
-// return { found: false } and let the agent reframe or drop the finding.
-// This is the shape specialists wrap in the shared `lookup_vercel_feature` tool.
+// deterministic keyword match over `when` and `category`. no fuzzy match or
+// embeddings - if the agent's concern doesnt overlap, we return
+// { found: false } and let the specialist either reframe or drop the
+// finding. this is the function each specialist wraps in its own
+// `lookup_vercel_feature` tool.
 const LookupInputSchema = z.object({
   concern: z.string().min(1),
   category: FindingCategorySchema.optional(),

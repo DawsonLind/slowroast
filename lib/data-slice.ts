@@ -5,14 +5,14 @@ import type {
 } from "@/lib/schemas";
 import type { ImgAsset, LinkAsset, ParsedAssets, ScriptAsset } from "@/lib/html";
 
-// Per-specialist slicing. Each specialist gets only what its domain needs —
-// keeps prompts focused and avoids leaking cross-domain context that would
-// bloat tokens and dilute attention. Pure functions; no I/O; the route
-// handler composes slices from the already-fetched PSI + HTML payload.
+// each specialist gets only what it needs for its domain. keeping the slices
+// narrow keeps the prompts focused and avoids bleeding cross-domain context
+// that would just dilute attention. pure functions, no I/O - the pipeline
+// composes them from the already-fetched PSI + HTML
 
-// Audit IDs the image specialist cares about. If Lighthouse renames or drops
-// one we'll just see a `null` entry — the specialist is prompted to tolerate
-// missing audits rather than error.
+// audit ids the image specialist cares about. if lighthouse renames or drops
+// one we get an undefined entry and the specialist prompt is built to shrug
+// it off rather than error
 const IMAGE_AUDIT_IDS = [
   "uses-optimized-images",
   "uses-webp-images",
@@ -65,9 +65,10 @@ export function extractImageSlice(
   };
 }
 
-// Lighthouse's LCP element audit returns details of the form:
+// lighthouse's LCP element audit returns shape:
 //   { type: "table", items: [{ node: { nodeLabel, selector, snippet, path } }] }
-// We narrow defensively — `details` is `unknown` in our PSI schema.
+// narrowing is defensive - `details` is `unknown` in our PSI schema so we
+// dont trust a specific shape without checking
 function parseLcpElement(audit: PsiAudit | undefined): LcpElement | null {
   if (!audit) return null;
   const details = audit.details;
@@ -129,8 +130,8 @@ export interface CacheSlice {
   performanceScore: number | null;
   htmlBlocked: boolean;
   blockReason: string | null;
-  // Already filtered to a perf-relevant allowlist by html.ts; pass through
-  // verbatim so the specialist can read the wire-level header values.
+  // html.ts already filtered these down to a perf-relevant allowlist - pass
+  // through verbatim so the specialist sees the wire-level header values
   originHeaders: Record<string, string>;
   cdn: CdnIdentification;
   audits: Partial<Record<CacheAuditId, PsiAudit>>;
@@ -157,9 +158,10 @@ export function extractCacheSlice(
   };
 }
 
-// CDN heuristic: a single header gives us high-confidence provider identity.
-// Vercel sets `x-vercel-cache`; Cloudflare sets `cf-cache-status`. We don't
-// try to reason about Akamai/Fastly/etc. for v1 — "unknown" is honest.
+// CDN sniff: a single header tells us the provider with high confidence.
+// vercel sets `x-vercel-cache`, cloudflare sets `cf-cache-status`. akamai,
+// fastly, and friends arent worth the heuristic complexity for v1 - "unknown"
+// is more honest than guessing
 function identifyCdn(
   headers: Record<string, string>,
 ): CdnIdentification {
@@ -172,9 +174,9 @@ function identifyCdn(
   return { provider: "unknown", raw: headers };
 }
 
-// PsiLighthouseResult.audits is `Record<string, PsiAudit>`, so callers wanting
-// a per-audit lookup (e.g. the cache specialist's get_audit_details tool) can
-// use this enum-like list to constrain inputs at the schema level.
+// PsiLighthouseResult.audits is `Record<string, PsiAudit>`, so anyone wanting
+// a constrained per-audit lookup (like the cache specialist's get_audit_details
+// tool) can use this list as a zod enum input
 export const CACHE_AUDIT_ID_LIST: readonly CacheAuditId[] = CACHE_AUDIT_IDS;
 
 // ---------------------------------------------------------------------------
@@ -200,9 +202,9 @@ export interface BundleSlice {
   blockReason: string | null;
   scripts: ScriptAsset[];
   totalScripts: number;
-  // Pre-classified third-party scripts: src hostname differs from page origin.
-  // Done at extraction time so the agent file never re-derives page-level
-  // facts (per the page-level-derivations decision in the chunk plan).
+  // pre-classified third-party scripts (src hostname differs from page
+  // origin). done once at extraction time so the agent never has to re-derive
+  // this page-level fact inside the tool loop
   thirdPartyScripts: ScriptAsset[];
   preloads: LinkAsset[];
   audits: Partial<Record<BundleAuditId, PsiAudit>>;
@@ -242,8 +244,8 @@ export function extractBundleSlice(
 
 export const BUNDLE_AUDIT_ID_LIST: readonly BundleAuditId[] = BUNDLE_AUDIT_IDS;
 
-// Defensive hostname parse: scripts may be inline (no src), data URIs, or
-// malformed. We treat any of those as "can't classify" rather than throwing.
+// defensive hostname parse. scripts can be inline, data URIs, or just
+// malformed - any of those becomes "cant classify" rather than a throw
 function safeHostname(url: string): string | null {
   try {
     return new URL(url).hostname;
@@ -256,12 +258,12 @@ function safeHostname(url: string): string | null {
 // Core Web Vitals specialist slice.
 // ---------------------------------------------------------------------------
 
-// The CWV specialist has two axes: the raw metric audits (LCP, CLS, INP, TBT,
-// FCP, SI) and diagnostic audits that explain *why* a metric is slow (LCP
-// element, layout-shift elements, long tasks, mainthread breakdown, lazy-
-// loaded LCP, font-display). We keep them as separate records on the slice so
-// the specialist prompt can anchor findings on metric-level signal and drill
-// into diagnostics via the get_cwv_diagnostic tool.
+// CWV has two flavors of audit: the raw metric scores (LCP, CLS, INP, TBT,
+// FCP, SI) and the diagnostic audits that explain *why* a metric is slow
+// (LCP element, layout-shift elements, long tasks, mainthread breakdown,
+// lazy-loaded LCP, font-display). keeping them as separate records lets the
+// prompt anchor on metric-level signal and drill into diagnostics through
+// the get_cwv_diagnostic tool - no need to dump both into the base prompt
 const CWV_METRIC_AUDIT_IDS = [
   "largest-contentful-paint",
   "cumulative-layout-shift",
@@ -292,8 +294,8 @@ export interface CwvSlice {
   metrics: Partial<Record<CwvMetricAuditId, PsiAudit>>;
   diagnostics: Partial<Record<CwvDiagnosticAuditId, PsiAudit>>;
   lcpElement: LcpElement | null;
-  // Preloads with as="font". Surfaces the "is this font preloaded" signal
-  // without making the agent filter the raw preload list.
+  // preloads with as="font". pre-filtered here so the agent doesnt have to
+  // sift through every preload link to answer "is the font preloaded?"
   fontPreloads: LinkAsset[];
 }
 

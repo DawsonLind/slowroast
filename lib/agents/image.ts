@@ -11,23 +11,21 @@ import { summarizeAuditDetails } from "@/lib/audit-summary";
 import type { ImageSlice } from "@/lib/data-slice";
 import type { ImgAsset } from "@/lib/html";
 
-// The model's own output schema. Narrower than SpecialistOutputSchema:
-// 1. `specialist` is stripped — we know this file is the image specialist,
-//    so there's no reason to make the model restate it. Code stamps it
-//    back on before returning.
-// 2. `summary` is stripped entirely — when we gave it to Haiku as an
-//    optional field it was reliably omitted (verified across three runs),
-//    and as a required field it was inconsistently emitted. Option C:
-//    do findings in the tool-loop call (what Haiku is good at — grounded
-//    reasoning over structured inputs) and generate the summary in a
-//    dedicated second call with no tools and a trivial output shape.
+// narrower than SpecialistOutputSchema on purpose. two things stripped:
+//   1. `specialist` - this file IS the image specialist, no reason to make
+//      the model restate it. stamped back on in code before we return.
+//   2. `summary` - haiku reliably dropped it when optional and got wobbly
+//      when required. splitting the summary into its own dedicated call (no
+//      tools, trivial output) made it consistent. findings here, summary
+//      over there - each call does one thing.
 const ImageModelOutputSchema = z.object({
   findings: z.array(FindingSchema),
 });
 
-// AI SDK 6 ToolLoopAgent uses `instructions:`, not `system:`. Three sections —
-// role, process, constraints — mirrors architecture.md §4 and §12. The
-// constraints section is what enforces catalog grounding at prompt time.
+// three sections: role, process, constraints. the constraints block is what
+// keeps the model from wandering outside the catalog - the prompt does the
+// work the schema cant. schema validates feature ids after the fact; the
+// prompt is what stops the model from inventing one in the first place.
 const INSTRUCTIONS = `You are the image-performance specialist on a panel of AI analysts reviewing a web page for Vercel-specific optimization opportunities.
 
 ROLE
@@ -62,9 +60,9 @@ export async function runImageSpecialist(
 ): Promise<SpecialistOutput> {
   const imagesByIndex = slice.images;
 
-  // Per-call tool: closes over this run's slice. Returning the full parsed
-  // ImgAsset + derived flags (position, LCP status) is enough signal for the
-  // model; no need to hand it raw HTML.
+  // closes over this run's slice. the parsed ImgAsset plus a couple derived
+  // flags (position, LCP status) is enough signal - the model never needs
+  // the raw HTML
   const getImageContext = tool({
     description:
       "Look up parsed attributes for a specific image by src. Matches on exact src or suffix. Returns loading, fetchpriority, width/height, whether it's a next/image-rendered tag, its index in the page's <img> order, and whether PSI flagged it as the LCP element.",
@@ -91,20 +89,19 @@ export async function runImageSpecialist(
         positionIndex: index,
         totalImages: imagesByIndex.length,
         isLcpElement,
-        // "Above-fold" heuristic: first five <img> in document order. Rough
-        // but good enough signal for the specialist's judgment layer.
+        // rough above-fold heuristic: first five <img> in document order.
+        // not exact, but good enough for the specialist to reason over
         likelyAboveFold: index < 5,
       };
     },
   });
 
-  // Image-pinned lookup tool. The catalog-level lookupVercelFeature accepts
-  // an optional `category` filter; we hardcode it to "image" here so the
-  // model physically cannot retrieve a non-image feature — a defense-in-depth
-  // complement to the "drop the finding if no confident match" prompt
-  // constraint. Without this pin we saw SVG-sizing concerns mapping to
-  // next-image-priority because the specialist's free-text concern tokens
-  // matched the feature's `when` field across categories.
+  // category pinned to "image" at tool-construction time, so the model cant
+  // physically reach features from other categories through this tool. belt
+  // and braces on top of the prompt constraint. before the pin we watched
+  // SVG-sizing concerns map to next-image-priority because the free-text
+  // tokens from the specialist happened to match `when` fields across
+  // several categories at once.
   const lookupVercelFeature = tool({
     description:
       "Look up a Vercel feature from the IMAGE subset of the catalog by a free-text concern (e.g. 'hero image missing priority', 'unoptimized image formats'). Returns the best image-category match or { found: false } if nothing in the image subset is confident. YOU MUST NOT recommend a Vercel feature you did not receive from this tool.",
@@ -137,11 +134,10 @@ export async function runImageSpecialist(
   const result = await agent.generate({ prompt: buildPrompt(slice) });
   const { findings } = result.output;
 
-  // Degraded-summary fallback: if the dedicated summary call fails (gateway
-  // rate limit, network, etc.), we don't want to discard the findings — the
-  // load-bearing payload. Log the error loudly so it surfaces in eval runs,
-  // return a clearly-deterministic one-liner so the synthesizer has
-  // something to work with, and keep the shape stable.
+  // if the summary call trips (gateway rate limit, network, whatever) we
+  // dont want to throw out the findings - they're the load-bearing payload
+  // here. log loudly so eval runs catch it, drop in a deterministic one-
+  // liner the synthesizer can still work with, keep the shape stable.
   let summary: string;
   try {
     summary = await generateSummary(slice, findings);
@@ -161,11 +157,11 @@ export async function runImageSpecialist(
   };
 }
 
-// Second call: dedicated Haiku invocation for the executive summary.
-// Keeps the main tool-loop call focused on grounded findings (what Haiku
-// does reliably) and moves the free-text generation — which Haiku
-// sporadically omits when co-emitted with a structured array — into its
-// own trivial text call where the response IS the summary.
+// dedicated second haiku call just for the summary. asking haiku to emit
+// findings + summary from the same call was flaky - it would either drop
+// the summary entirely or return a half-shaped one when the findings array
+// got long. separating the two calls means each one has exactly one job
+// and the output stays boring and predictable.
 async function generateSummary(
   slice: ImageSlice,
   findings: z.infer<typeof FindingSchema>[],
@@ -199,10 +195,11 @@ Write the 2–3 sentence executive summary now.`,
   return text.trim();
 }
 
-// Token-economical structured summary. We pass the full audit payloads
-// because Lighthouse details carry the specific image URLs and savings
-// estimates the specialist needs to ground findings; images are capped
-// (totalImagesOnPage still surfaces the real count).
+// prompt budget. we include full audit payloads because lighthouse details
+// carry the URLs and savings numbers the specialist needs to ground findings
+// on. the image inventory is capped at MAX_INLINED_IMAGES - totalImagesOnPage
+// still surfaces the real count in the header so the model knows if we
+// truncated.
 const MAX_INLINED_IMAGES = 30;
 
 function buildPrompt(slice: ImageSlice): string {

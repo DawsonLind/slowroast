@@ -14,9 +14,8 @@ import {
   type CacheSlice,
 } from "@/lib/data-slice";
 
-// Same narrowing rationale as image.ts: the model emits findings; the
-// specialist field is stamped in code; the summary is generated in a
-// dedicated second call (Haiku working-memory issue from Chunk 1).
+// same narrowing as image.ts: model emits findings, specialist stamped in
+// code, summary in its own dedicated haiku call.
 const CacheModelOutputSchema = z.object({
   findings: z.array(FindingSchema),
 });
@@ -67,9 +66,9 @@ Output only the summary text. No preamble, no headers, no bullets.`;
 export async function runCacheSpecialist(
   slice: CacheSlice,
 ): Promise<SpecialistOutput> {
-  // Per-call domain tool: closes over this run's audits. Audit-id input is
-  // constrained to the cache subset so the model can't peek at other
-  // specialists' audits via this tool.
+  // closes over this run's audits. the audit-id input is constrained to the
+  // cache subset so the model cant reach another specialists audits through
+  // this tool.
   const auditIdEnum = z.enum(
     CACHE_AUDIT_ID_LIST as readonly [CacheAuditId, ...CacheAuditId[]],
   );
@@ -98,9 +97,8 @@ export async function runCacheSpecialist(
     },
   });
 
-  // Cache-pinned lookup tool. Same defense-in-depth rationale as image.ts:
-  // the category is deterministic per specialist, so we hardcode it at tool
-  // construction rather than relying on the model to filter correctly.
+  // category pinned at construction. same pattern as the other specialists -
+  // dont lean on the model to remember to filter.
   const lookupVercelFeature = tool({
     description:
       "Look up a Vercel feature from the CACHE subset of the catalog by a free-text concern (e.g. 'static assets missing long cache-control', 'page forced dynamic by a single cookie read'). Returns the best cache-category match or { found: false } if nothing in the cache subset is confident. YOU MUST NOT recommend a Vercel feature you did not receive from this tool.",
@@ -123,12 +121,12 @@ export async function runCacheSpecialist(
       get_audit_details: getAuditDetails,
       lookup_vercel_feature: lookupVercelFeature,
     },
-    // Higher cap than image (which uses 6): the cache catalog has 7
-    // candidate features vs image's 2, so the model typically makes more
-    // lookup_vercel_feature calls before settling on a finding's mapping,
-    // and may also drill into multiple audits via get_audit_details.
-    // First run against vercel.com hit NoOutputGeneratedError at 6 steps —
-    // the model ran out of budget before emitting structured output.
+    // 10 steps, up from image's 6. the cache catalog has 7 features vs
+    // image's 2, so the model usually makes more lookup calls before it
+    // settles on a mapping - and it also drills into multiple audits via
+    // get_audit_details. first run against vercel.com hit
+    // NoOutputGeneratedError at 6 steps; the model ran out of budget
+    // before it could emit the structured output.
     stopWhen: stepCountIs(10),
     output: Output.object({ schema: CacheModelOutputSchema }),
     providerOptions: {
@@ -139,8 +137,8 @@ export async function runCacheSpecialist(
   const result = await agent.generate({ prompt: buildPrompt(slice) });
   const { findings } = result.output;
 
-  // Same degraded-summary fallback shape as image.ts: log loudly, return a
-  // deterministic one-liner, never discard the load-bearing findings.
+  // same degraded-summary fallback as image.ts: log loudly, deterministic
+  // one-liner, never throw out the findings.
   let summary: string;
   try {
     summary = await generateSummary(slice, findings);

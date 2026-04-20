@@ -11,8 +11,8 @@ import { summarizeAuditDetails } from "@/lib/audit-summary";
 import type { BundleSlice } from "@/lib/data-slice";
 import type { ScriptAsset } from "@/lib/html";
 
-// Same narrowing rationale as image.ts and cache.ts: model emits findings;
-// `specialist` is stamped in code; `summary` is a dedicated second call.
+// same narrowing as image.ts: model emits findings, `specialist` is stamped
+// in code, the summary lives in its own dedicated second call.
 const BundleModelOutputSchema = z.object({
   findings: z.array(FindingSchema),
 });
@@ -67,9 +67,9 @@ export async function runBundleSpecialist(
     slice.thirdPartyScripts.map((s) => s.src).filter((s): s is string => s != null),
   );
 
-  // Per-call domain tool: closes over this run's script inventory + the
-  // pre-classified third-party set. Returning the full ScriptAsset plus the
-  // derived flags is enough signal — no need to ship raw HTML.
+  // closes over the script inventory + the pre-classified third-party set.
+  // the full ScriptAsset plus the two derived flags is enough signal - no
+  // need to ship raw HTML into the tool.
   const getScriptContext = tool({
     description:
       "Look up parsed attributes for a specific script by src. Matches on exact src or suffix. Returns async/defer/type/data-nscript-strategy, position in document order, total scripts, whether it's third-party (different hostname from the page), and whether it's already next/script-managed.",
@@ -97,9 +97,9 @@ export async function runBundleSpecialist(
     },
   });
 
-  // Bundle-pinned lookup tool. Same defense-in-depth rationale as image.ts /
-  // cache.ts: category is deterministic per specialist, hardcode it at tool
-  // construction.
+  // category pinned at construction - same belt-and-braces pattern as the
+  // other specialists. category is deterministic per file so theres no
+  // reason to leave it to the model.
   const lookupVercelFeature = tool({
     description:
       "Look up a Vercel feature from the BUNDLE subset of the catalog by a free-text concern (e.g. 'GTM loading synchronously', 'unused JavaScript on the page'). Returns the best bundle-category match or { found: false } if nothing in the bundle subset is confident. YOU MUST NOT recommend a Vercel feature you did not receive from this tool.",
@@ -122,9 +122,9 @@ export async function runBundleSpecialist(
       get_script_context: getScriptContext,
       lookup_vercel_feature: lookupVercelFeature,
     },
-    // Match cache's higher cap (10): script-heavy pages produce more
-    // get_script_context calls and the bundle catalog has four candidate
-    // features (more lookups than image's two-feature catalog).
+    // 10 matches cache. script-heavy pages make more get_script_context
+    // calls, and with four bundle features in the catalog theres more
+    // lookup traffic than images two-feature lane.
     stopWhen: stepCountIs(10),
     output: Output.object({ schema: BundleModelOutputSchema }),
     providerOptions: {

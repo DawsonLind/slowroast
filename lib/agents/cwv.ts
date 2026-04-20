@@ -11,9 +11,8 @@ import { summarizeAuditDetails } from "@/lib/audit-summary";
 import type { CwvSlice } from "@/lib/data-slice";
 import type { LinkAsset } from "@/lib/html";
 
-// Same narrowing rationale as image.ts / cache.ts / bundle.ts: model emits
-// findings; `specialist` is stamped in code; `summary` is a dedicated
-// second call (Haiku working-memory issue from Chunk 1).
+// same narrowing as the other specialists: model emits findings, specialist
+// stamped in code, summary in its own dedicated call.
 const CwvModelOutputSchema = z.object({
   findings: z.array(FindingSchema),
 });
@@ -60,11 +59,10 @@ Output only the summary text. No preamble, no headers, no bullets.`;
 export async function runCwvSpecialist(
   slice: CwvSlice,
 ): Promise<SpecialistOutput> {
-  // Per-call domain tool. Input constrained to four metric shorthand keys
-  // (lcp / cls / inp / tbt) — the diagnostic payloads for each metric differ,
-  // so the tool switches on the metric and returns the right subset. Each
-  // constituent audit's details runs through summarizeAuditDetails with a
-  // tighter charCap (1200) so a two-audit return stays under ~2500 chars.
+  // input is one of four metric keys (lcp / cls / inp / tbt). each metric
+  // has its own diagnostic audits, so the tool switches on the metric and
+  // returns just the relevant subset. summarizeAuditDetails runs with a
+  // tighter charCap (1200) to keep a two-audit return under ~2500 chars.
   const metricEnum = z.enum(["lcp", "cls", "inp", "tbt"]);
 
   const getCwvDiagnostic = tool({
@@ -116,11 +114,10 @@ export async function runCwvSpecialist(
     },
   });
 
-  // CWV-pinned lookup tool. Same defense-in-depth pattern as the other
-  // specialists: hardcode category at tool construction. With only two CWV
-  // features in the catalog, the pin also prevents the keyword matcher from
-  // latching onto an image/bundle/cache feature when the concern text
-  // coincidentally contains shared tokens (e.g. "image", "script").
+  // category pinned at construction. extra important here - with only two
+  // features in the CWV catalog, without the pin the keyword matcher would
+  // happily latch onto an image/bundle/cache feature whenever the concern
+  // text happens to share tokens like "image" or "script".
   const lookupVercelFeature = tool({
     description:
       "Look up a Vercel feature from the CWV subset of the catalog by a free-text concern (e.g. 'web fonts loaded without preload', 'single dynamic island forcing the whole page dynamic'). The CWV subset has only two features: font-optimization and partial-prerendering. Returns the best match or { found: false } if nothing in the CWV subset is confident. YOU MUST NOT recommend a Vercel feature you did not receive from this tool.",
@@ -143,10 +140,10 @@ export async function runCwvSpecialist(
       get_cwv_diagnostic: getCwvDiagnostic,
       lookup_vercel_feature: lookupVercelFeature,
     },
-    // Match cache's and bundle's higher cap (10): the metric-to-lane
-    // classification step often consumes multiple get_cwv_diagnostic calls
-    // before the model can decide whether to emit a finding or defer the
-    // concern to another specialist's lane in the prose summary.
+    // 10 matches cache and bundle. the metric-to-lane classification step
+    // usually takes several get_cwv_diagnostic calls before the model can
+    // decide whether to emit a finding or defer the concern to another
+    // lane in the prose summary.
     stopWhen: stepCountIs(10),
     output: Output.object({ schema: CwvModelOutputSchema }),
     providerOptions: {
@@ -293,8 +290,8 @@ function formatAudit(id: string, audit: PsiAudit): string {
   return parts.join(" ");
 }
 
-// Header-only projection for diagnostic audits; full details are reachable
-// via get_cwv_diagnostic so we don't need to inline them in the prompt.
+// header-only projection for diagnostics - full details are one tool call
+// away via get_cwv_diagnostic, no need to inline them in the base prompt.
 function formatAuditHeader(id: string, audit: PsiAudit): string {
   const parts: string[] = [`- ${id}`];
   parts.push(`score=${audit.score ?? "n/a"}`);

@@ -3,22 +3,23 @@ import { z } from "zod";
 import { runAnalysis, PipelineError } from "@/lib/pipeline";
 import type { ProgressEvent } from "@/lib/progress-events";
 
-// Node is the default runtime (Cache Components doesn't support Edge, and our
-// PSI/HTML fetch + Node SDKs expect Node). Under `cacheComponents: true`, the
-// route is dynamic by default — anything not inside `'use cache'` runs
-// per-request, which is exactly what we want for per-URL analyses. Next.js 16
-// rejects both `export const runtime` and `export const dynamic` alongside
-// cacheComponents, so we rely on defaults and let the config drive behavior.
+// node runtime by default - cache components doesnt support edge, and our
+// PSI/HTML fetch path plus the node SDKs expect node anyway. with
+// `cacheComponents: true` the route is dynamic unless its inside `'use cache'`,
+// which is exactly what we want for per-URL analyses. next.js 16 rejects
+// both `export const runtime` and `export const dynamic` alongside
+// cacheComponents, so we skip the explicit exports and let the config drive
+// everything.
 //
-// 240s covers the worst-case phase envelope: 60s PSI + 2×40s specialists
-// (serialized by p-limit(2)) + 90s synth + ~10s slack. Both PSI and synth
-// caps were rebased on 2026-04-19 from the 7-URL eval distribution
+// 240s covers the worst-case phase envelope: 60s PSI + 2x40s specialists
+// (serialized by p-limit(2)) + 90s synth + a bit of slack. the PSI and
+// synth caps were both rebased on 2026-04-19 from the 7-URL eval
 // (evals/results.json):
-//   PSI    30s → 60s  (eval p95 = 45s; old cap timed out 37% of runs)
-//   synth  30s → 90s  (eval p95 = 70s; old cap timed out 58% of runs)
-// Pro-plan Vercel functions allow up to 800s; 240s leaves headroom while
-// keeping client-perceived hangs bounded. Real e2e p95 from the eval was
-// ~141s — well under this cap.
+//   PSI    30s -> 60s  (eval p95 = 45s; old cap timed out 37% of runs)
+//   synth  30s -> 90s  (eval p95 = 70s; old cap timed out 58% of runs)
+// pro-plan vercel functions go up to 800s so theres headroom, but bounding
+// client-perceived hangs matters more than stretching the cap. real e2e
+// p95 from the eval was ~141s - well under this.
 export const maxDuration = 240;
 
 const BodySchema = z.object({
@@ -44,11 +45,11 @@ export async function POST(req: NextRequest): Promise<Response> {
     );
   }
 
-  // Stream progress events as newline-delimited JSON. Once the stream is
-  // open we always return HTTP 200 and surface pipeline errors as in-band
-  // {type: "error"} events — flipping the HTTP status mid-stream isn't
-  // possible, and matching status codes to partial failures is an exercise
-  // the client doesn't need. Body-validation errors above stay JSON / 400.
+  // progress events stream as newline-delimited JSON. once the stream is
+  // open we always return 200 and surface pipeline errors as in-band
+  // {type:"error"} events - you cant flip the HTTP status mid-stream, and
+  // mapping partial failures onto status codes isnt work the client needs
+  // to do. body-validation errors above this block still go out as JSON/400.
   const encoder = new TextEncoder();
   const stream = new ReadableStream<Uint8Array>({
     start(controller) {
@@ -85,8 +86,8 @@ export async function POST(req: NextRequest): Promise<Response> {
     status: 200,
     headers: {
       "Content-Type": "application/x-ndjson; charset=utf-8",
-      // Proxies/CDNs will happily buffer a streaming body; this hint tells
-      // them not to. Vercel's platform honors it.
+      // proxies and CDNs will happily buffer a streaming body - this header
+      // tells them not to. vercel honors it.
       "Cache-Control": "no-cache, no-transform",
       "X-Accel-Buffering": "no",
     },
