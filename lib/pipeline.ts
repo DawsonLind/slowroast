@@ -21,13 +21,18 @@ import type {
 export type { SynthAttempt } from "@/lib/synth";
 
 // Phase budgets. Independent hard caps — a slow PSI does NOT steal time from
-// specialists. Route-level maxDuration = 120s adds a safety net above these.
-// Synth budget was 15s originally; 3-of-3 test:pipeline runs against
-// vercel.com showed Sonnet 4.6 blowing past 15s on the structured-output
-// synth call (executiveSummary + up to 10 findings with strict catalog-enum
-// vercelFeatureId + topPriority). 30s matches observed ceiling plus slack.
+// specialists. Route-level maxDuration adds a safety net above these.
+//
+// Synth budget history:
+//   15s → 30s after vercel.com testing (Day 2). 30s held only because vercel.com
+//   sits at the fast end of the distribution.
+//   30s → 90s on 2026-04-19 after the 7-URL eval (evals/results.json) measured
+//   the real distribution: median 32s, p75 41s, p90 65s, p95 70s, max 70s
+//   (reddit.com). The 30s cap was timing out 58% of real-world runs. 90s
+//   covers p95 with ~25% slack; complex sites (many findings → larger
+//   structured output) are the cost driver.
 const SPECIALIST_TIMEOUT_MS = 40_000;
-const DEFAULT_SYNTH_TIMEOUT_MS = 30_000;
+const DEFAULT_SYNTH_TIMEOUT_MS = 90_000;
 
 // Cap concurrent specialist execution. Discovered empirically: four specialists
 // firing at once (each doing the two-call pattern — tool-loop + dedicated
@@ -120,14 +125,15 @@ export interface AnalysisResult {
 
 export interface RunAnalysisOptions {
   signal?: AbortSignal;
-  // Overrides fetchPsi's 30s default. The API route should OMIT this — a fast
-  // PSI fail is the right UX there. Manual harnesses (scripts/test-pipeline.ts,
-  // eval runs) should pass ~60s because PSI's wall clock varies meaningfully
-  // on real sites and the documented arch doc range is 10–30s.
+  // Overrides fetchPsi's 60s default. The API route should OMIT this. Manual
+  // harnesses (scripts/test-pipeline.ts, eval runs) may pass higher to capture
+  // long-tail distributions without truncation, but the default already covers
+  // observed p95 (~45s on the 7-URL eval).
   psiTimeoutMs?: number;
-  // Overrides the 30s synth default. Mirrors psiTimeoutMs so eval harnesses
-  // can tighten or loosen independently of the API route. Once eval gives us
-  // p95 synth data, we may shrink this below 30s for the route specifically.
+  // Overrides the 90s synth default. Mirrors psiTimeoutMs so eval harnesses
+  // can tighten or loosen independently of the API route — the eval harness
+  // currently runs with 150s to record the natural distribution without
+  // truncation.
   synthTimeoutMs?: number;
 }
 
@@ -139,7 +145,7 @@ export async function runAnalysis(
 
   const totalStartedAt = Date.now();
 
-  // Phase 1: deterministic data collection. PSI enforces its own 30s cap;
+  // Phase 1: deterministic data collection. PSI enforces its own 60s cap;
   // fetchHtml is 10s. Both accept AbortSignal so caller disconnects win.
   const psiStartedAt = Date.now();
   let psi, htmlResult;

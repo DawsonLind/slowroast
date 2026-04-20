@@ -153,7 +153,14 @@ User pastes URL
  Result cached via `use cache` + `cacheTag(\`analysis-\${urlHash}\`)`
 ```
 
-**Phase budgets (hard caps in `lib/pipeline.ts`):** PSI 30s (API route) / 60s (manual + eval harness), specialists 40s per-lane (Promise.race), synth 30s. Route-level `maxDuration = 120s` (Day 2 Chunk 4). Observed wall clock against `https://vercel.com/`: p50 ≈ 75s end-to-end. Synth grew from 15s → 30s after empirical measurement showed Sonnet 4.6 consistently needs ~15s+ for `ReportSchema` structured output (up to 10 findings × 9 fields + executiveSummary prose, all under strict catalog-enum validation).
+**Phase budgets (hard caps in `lib/pipeline.ts` + `lib/psi.ts`):** PSI 60s, specialists 40s per-lane (Promise.race, p-limit(2) caps phase wall clock at ~80s), synth 90s. Route-level `maxDuration = 240s`. Observed e2e p95 ≈ 141s on the 7-URL eval. The PSI and synth caps were both rebased on 2026-04-19 from `evals/results.json`:
+
+| Phase | Old cap | New cap | Eval distribution | Old cap failure rate |
+|---|---|---|---|---|
+| PSI | 30s | 60s | median 22s, p95 45s, max 45s (hulu.com) | 37% of runs |
+| Synth | 30s | 90s | median 32s, p95 70s, max 70s (reddit.com) | 58% of runs |
+
+Both original caps were tuned against vercel.com only, which sits at the fast end of the synth distribution and the slow end of the PSI distribution — the worst possible single sample to extrapolate from. Synth's cost scales with output token count (more findings → longer structured output, capped at 10 in the schema); PSI's cost scales with site complexity (Lighthouse runs against the real page).
 
 ### The Design Principle: Grounded Specialists, LLM-for-Judgment
 

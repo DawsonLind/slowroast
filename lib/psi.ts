@@ -6,19 +6,24 @@ import {
 const PSI_ENDPOINT =
   "https://www.googleapis.com/pagespeedonline/v5/runPagespeed";
 
-// Arch doc §7/§12 expect PSI to run in the 10–30s range. 30s caps the wait so
-// a hung upstream can't stall the whole agent pipeline; the API route degrades
-// to direct-fetch-only results in that case.
-const DEFAULT_TIMEOUT_MS = 30_000;
+// PSI cap. Was 30s through Day 3 — matched the arch doc's 10–30s expected
+// range — but the 7-URL eval (evals/results.json, 2026-04-19) measured the
+// real distribution at median 22s, p75 36s, p90 43s, p95 45s, max 45s
+// (hulu.com). The 30s cap was timing out 37% of real-world runs, including
+// every vercel.com run (30.7/31.7/41.7s). Lighthouse against complex sites
+// is the cost driver. 60s covers p95 with ~33% slack and matches the cap the
+// eval harness has been using all along.
+const DEFAULT_TIMEOUT_MS = 60_000;
 
 export type PsiStrategy = "mobile" | "desktop";
 
 export interface FetchPsiOptions {
   strategy?: PsiStrategy;
   signal?: AbortSignal;
-  // Override the 30s default. The API route should keep the default to fail
-  // fast; manual/eval harnesses may want a longer cap since PSI's run-time
-  // varies meaningfully under real-world load.
+  // Override the 60s default. The API route uses the default; manual/eval
+  // harnesses already pass 60s explicitly (kept for symmetry with synth's
+  // override). Lower it only when you have specific reason to fail faster
+  // than p95 of real PSI runs.
   timeoutMs?: number;
 }
 

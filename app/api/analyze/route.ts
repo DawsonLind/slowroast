@@ -8,12 +8,17 @@ import { runAnalysis, PipelineError } from "@/lib/pipeline";
 // per-request, which is exactly what we want for per-URL analyses. Next.js 16
 // rejects both `export const runtime` and `export const dynamic` alongside
 // cacheComponents, so we rely on defaults and let the config drive behavior.
-// 120s covers the observed phase budget: 30s PSI + 2×40s specialists
-// (serialized by p-limit(2)) + 30s synth, with slack. Synth grew from 15s
-// to 30s after empirical measurement showed Sonnet 4.6 consistently needs
-// ~15s+ for ReportSchema structured output. See docs/architecture.md §2
-// and lib/pipeline.ts budgets.
-export const maxDuration = 120;
+//
+// 240s covers the worst-case phase envelope: 60s PSI + 2×40s specialists
+// (serialized by p-limit(2)) + 90s synth + ~10s slack. Both PSI and synth
+// caps were rebased on 2026-04-19 from the 7-URL eval distribution
+// (evals/results.json):
+//   PSI    30s → 60s  (eval p95 = 45s; old cap timed out 37% of runs)
+//   synth  30s → 90s  (eval p95 = 70s; old cap timed out 58% of runs)
+// Pro-plan Vercel functions allow up to 800s; 240s leaves headroom while
+// keeping client-perceived hangs bounded. Real e2e p95 from the eval was
+// ~141s — well under this cap.
+export const maxDuration = 240;
 
 const BodySchema = z.object({
   url: z.string().url(),
