@@ -1,8 +1,9 @@
 "use client";
 
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { useEffect, useState } from "react";
+import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
-import { Check } from "lucide-react";
+import { Loader2 } from "lucide-react";
 
 export type PhaseStatus = "pending" | "running" | "done";
 
@@ -12,18 +13,62 @@ export interface PsiCardProps {
   elapsedMs: number;
 }
 
+interface LogLine {
+  id: string;
+  at: number;
+  kind: "info" | "done";
+  text: string;
+}
+
 // Temp data-collection card shown while PSI + HTML fetch are in flight.
-// PSI is the critical path here - google runs a real lighthouse audit which
-// regularly takes 20-45s, and specialists dont start until it returns.
-// without this card the user stares at four idle specialist cards the whole
-// time. Analyzer unmounts this the moment phases.psi flips to "done".
+// PSI is the critical path here — Google runs a real Lighthouse audit
+// which regularly takes 20–45s, and specialists don't start until it returns.
+// The log below is anchored to real phase events (psiStatus/htmlStatus flips)
+// plus a couple of elapsed-time thresholds; no line claims something that
+// isn't actually happening. Analyzer unmounts this the moment phases.psi
+// flips to "done".
 export function PsiCard({ psiStatus, htmlStatus, elapsedMs }: PsiCardProps) {
+  const [lines, setLines] = useState<LogLine[]>([]);
+
+  useEffect(() => {
+    setLines((prev) => {
+      const ids = new Set(prev.map((l) => l.id));
+      const next = [...prev];
+      const add = (id: string, at: number, kind: LogLine["kind"], text: string) => {
+        if (ids.has(id)) return;
+        ids.add(id);
+        next.push({ id, at, kind, text });
+      };
+
+      add("psi-start", 0, "info", "→ POST pagespeedonline.googleapis.com/runPagespeed");
+      add("html-start", 0, "info", "→ GET origin (headers + body)");
+
+      if (elapsedMs >= 2000) {
+        add("psi-wait", 2000, "info", "· Lighthouse audit running in Google's infra");
+      }
+      if (htmlStatus === "done") {
+        add("html-done", elapsedMs, "done", "✓ HTML + response headers received");
+      }
+      if (elapsedMs >= 20000 && psiStatus !== "done") {
+        add("psi-long", 20000, "info", "· still waiting on Lighthouse (typical 20–45s)");
+      }
+      if (psiStatus === "done") {
+        add("psi-done", elapsedMs, "done", "✓ PSI audit complete, dispatching specialists");
+      }
+
+      return next;
+    });
+  }, [elapsedMs, psiStatus, htmlStatus]);
+
   return (
-    <Card className="min-h-[160px] ring-1 ring-border">
-      <CardHeader>
+    <Card className="bg-card/60 ring-1 ring-border/50">
+      <CardHeader className="pb-3">
         <div className="flex items-center justify-between gap-3">
           <div className="flex items-center gap-2">
-            <span className="roast-dot inline-block h-1.5 w-1.5 rounded-full" />
+            <Loader2
+              className="h-3.5 w-3.5 animate-spin text-muted-foreground"
+              aria-hidden
+            />
             <div className="text-xs uppercase tracking-wider text-muted-foreground">
               Data collection · PageSpeed Insights + HTML
             </div>
@@ -32,69 +77,34 @@ export function PsiCard({ psiStatus, htmlStatus, elapsedMs }: PsiCardProps) {
             {(elapsedMs / 1000).toFixed(0)}s
           </span>
         </div>
-        <CardTitle className="text-lg">
-          Running Lighthouse audit in Google&apos;s infra…
-        </CardTitle>
       </CardHeader>
-      <CardContent className="flex flex-col gap-4">
-        <p className="text-sm leading-relaxed text-muted-foreground">
-          Specialists don&apos;t start until the facts are in. PSI runs a real
-          Lighthouse audit server-side; we fetch raw HTML in parallel to capture
-          response headers and the unminified markup. Typical PSI call:
-          20–45 seconds.
-        </p>
-
-        <div className="flex items-center gap-4">
-          <div className="roast-rings shrink-0">
-            <span />
-            <span />
-            <span />
-          </div>
-          <div className="flex flex-1 flex-col gap-2">
-            <PhaseRow label="PageSpeed Insights" status={psiStatus} />
-            <PhaseRow label="HTML + headers" status={htmlStatus} />
-            <div className="roast-bar h-1" />
-          </div>
+      <CardContent>
+        <div
+          className="rounded-md border border-border/40 bg-muted/30 px-3 py-2 font-mono text-[11px] leading-6"
+          aria-live="polite"
+        >
+          {lines.length === 0 ? (
+            <div className="text-muted-foreground/60">warming up…</div>
+          ) : (
+            lines.map((line) => (
+              <div key={line.id} className="flex items-start gap-3">
+                <span className="w-10 shrink-0 tabular-nums text-muted-foreground/60">
+                  [{(line.at / 1000).toFixed(1)}s]
+                </span>
+                <span
+                  className={cn(
+                    line.kind === "done"
+                      ? "text-emerald-600 dark:text-emerald-400"
+                      : "text-foreground/80",
+                  )}
+                >
+                  {line.text}
+                </span>
+              </div>
+            ))
+          )}
         </div>
       </CardContent>
     </Card>
   );
-}
-
-function PhaseRow({ label, status }: { label: string; status: PhaseStatus }) {
-  return (
-    <div className="flex items-center gap-2 text-[12px]">
-      <StatusDot status={status} />
-      <span
-        className={cn(
-          "flex-1",
-          status === "done" ? "text-foreground/80" : "text-muted-foreground",
-        )}
-      >
-        {label}
-      </span>
-      <span className="font-mono text-[11px] uppercase tracking-wider text-muted-foreground">
-        {status === "running" ? "fetching" : status === "done" ? "ready" : "queued"}
-      </span>
-    </div>
-  );
-}
-
-function StatusDot({ status }: { status: PhaseStatus }) {
-  if (status === "done") {
-    return (
-      <span className="flex h-4 w-4 items-center justify-center rounded-full bg-emerald-500/15 text-emerald-600 dark:text-emerald-400">
-        <Check className="h-3 w-3" aria-hidden />
-      </span>
-    );
-  }
-  if (status === "running") {
-    return (
-      <span className="relative inline-flex h-2 w-2">
-        <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-primary/60" />
-        <span className="relative inline-flex h-2 w-2 rounded-full bg-primary" />
-      </span>
-    );
-  }
-  return <span className="h-2 w-2 rounded-full bg-muted-foreground/30" />;
 }

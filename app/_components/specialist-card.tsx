@@ -212,7 +212,7 @@ function StatusIndicator({
   if (status === "idle") {
     return (
       <span className="text-[11px] uppercase tracking-wider text-muted-foreground">
-        ready
+        awaiting
       </span>
     );
   }
