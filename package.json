@@ -21,6 +21,7 @@
     "@ai-sdk/openai": "^3.0.53",
     "@ai-sdk/react": "^3.0.170",
     "@base-ui/react": "^1.4.0",
+    "@vercel/analytics": "^2.0.1",
     "ai": "^6.0.168",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
