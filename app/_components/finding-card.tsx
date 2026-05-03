@@ -1,3 +1,5 @@
+"use client";
+
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 import {
@@ -7,6 +9,10 @@ import {
 import type { Finding } from "@/lib/schemas";
 import { SPECIALIST_META } from "@/lib/ui-meta";
 import { SeverityBadge } from "./severity-badge";
+import { Button } from "@/components/ui/button";
+import { Copy } from "lucide-react";
+import { toast } from "sonner";
+import { formatFindingAsMarkdown } from "@/lib/format-markdown";
 
 export function FindingCard({
   finding,
@@ -18,6 +24,21 @@ export function FindingCard({
   id?: string;
 }) {
   const meta = SPECIALIST_META[finding.category];
+  
+  const handleCopyMarkdown = async () => {
+    try {
+      const markdown = formatFindingAsMarkdown(finding);
+      await navigator.clipboard.writeText(markdown);
+      toast.success("Copied to clipboard", {
+        description: "Finding copied as markdown",
+      });
+    } catch (error) {
+      toast.error("Failed to copy", {
+        description: error instanceof Error ? error.message : "Could not copy to clipboard",
+      });
+    }
+  };
+  
   return (
     <Card
       id={id}
@@ -41,7 +62,19 @@ export function FindingCard({
               {emphasis ? `Top priority · ${meta.shortLabel}` : meta.shortLabel}
             </span>
           </div>
-          <SeverityBadge severity={finding.severity} />
+          <div className="flex items-center gap-2">
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={handleCopyMarkdown}
+              className="h-7 w-7 p-0"
+              title="Copy as markdown"
+            >
+              <Copy className="h-3.5 w-3.5" />
+              <span className="sr-only">Copy as markdown</span>
+            </Button>
+            <SeverityBadge severity={finding.severity} />
+          </div>
         </div>
         <CardTitle className={cn(emphasis ? "text-xl leading-snug" : undefined)}>
           {finding.title}
