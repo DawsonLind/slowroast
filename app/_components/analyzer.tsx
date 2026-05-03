@@ -121,6 +121,41 @@ export function Analyzer() {
     return () => clearInterval(id);
   }, [state.kind]);
 
+  // Track when the PsiCard first became visible to enforce a minimum display
+  // window. Prevents flicker when PSI completes in <500ms (common on cached
+  // URLs). The card unmounts only after PSI is done AND at least 400ms have
+  // elapsed since it first mounted.
+  const psiCardMountedAt = useRef<number | null>(null);
+  const [psiCardCanUnmount, setPsiCardCanUnmount] = useState(false);
+
+  // Track PSI phase and enforce minimum display duration
+  useEffect(() => {
+    if (state.kind !== "analyzing") {
+      // Reset on new analysis or terminal state
+      psiCardMountedAt.current = null;
+      setPsiCardCanUnmount(false);
+      return;
+    }
+
+    // Record when the card first mounts (when we transition to analyzing state)
+    if (psiCardMountedAt.current === null) {
+      psiCardMountedAt.current = Date.now();
+    }
+
+    // If PSI is done, schedule unmount after minimum display window
+    if (state.phases.psi === "done" && !psiCardCanUnmount) {
+      const elapsed = Date.now() - psiCardMountedAt.current;
+      const MIN_DISPLAY_MS = 400;
+      const remaining = Math.max(0, MIN_DISPLAY_MS - elapsed);
+      
+      const timeout = setTimeout(() => {
+        setPsiCardCanUnmount(true);
+      }, remaining);
+      
+      return () => clearTimeout(timeout);
+    }
+  }, [state, psiCardCanUnmount]);
+
   const abortRef = useRef<AbortController | null>(null);
   const lastSubmitRef = useRef<React.FormEvent | null>(null);
 
@@ -134,6 +169,9 @@ export function Analyzer() {
 
     abortRef.current?.abort();
     abortRef.current = new AbortController();
+    // Reset the PSI card mount tracking on each new analysis
+    psiCardMountedAt.current = null;
+    setPsiCardCanUnmount(false);
     setState({
       kind: "analyzing",
       startedAt: Date.now(),
@@ -238,7 +276,7 @@ export function Analyzer() {
 
       {state.kind !== "idle" ? (
         <>
-          {state.kind === "analyzing" && state.phases.psi !== "done" ? (
+          {state.kind === "analyzing" && !psiCardCanUnmount ? (
             <PsiCard
               psiStatus={state.phases.psi}
               htmlStatus={state.phases.html}
