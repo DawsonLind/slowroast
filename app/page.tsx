@@ -1,6 +1,5 @@
-import Link from "next/link";
 import { Analyzer } from "./_components/analyzer";
-import { BrandMark } from "./_components/brand-mark";
+import { SiteFooter, SiteHeader } from "./_components/site-chrome";
 
 // PPR under cacheComponents: the page shell is fully static (no dynamic APIs,
 // no uncached awaits), so Next.js prerenders it at build time. The Analyzer is
@@ -11,7 +10,7 @@ import { BrandMark } from "./_components/brand-mark";
 export default function Home() {
   return (
     <div className="flex min-h-full flex-col bg-background text-foreground">
-      <SiteHeader />
+      <SiteHeader subtitle="multi-agent web perf analyzer" />
 
       <main className="mx-auto flex w-full max-w-5xl flex-1 flex-col gap-10 px-6 py-10">
         <section className="flex flex-col gap-4">
@@ -31,58 +30,5 @@ export default function Home() {
 
       <SiteFooter />
     </div>
-  );
-}
-
-function SiteHeader() {
-  return (
-    <header className="border-b border-border">
-      <div className="mx-auto flex w-full max-w-5xl items-center justify-between px-6 py-4">
-        <Link
-          href="/"
-          className="flex items-center gap-2 rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
-        >
-          <BrandMark />
-          <span className="font-heading text-lg font-semibold tracking-tight">
-            Slowroast
-          </span>
-          <span className="hidden text-xs text-muted-foreground sm:inline">
-            multi-agent web perf analyzer
-          </span>
-        </Link>
-        <nav className="flex items-center gap-4 text-sm">
-          <Link
-            href="/evals"
-            className="rounded-sm px-1 text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
-          >
-            Evals
-          </Link>
-        </nav>
-      </div>
-    </header>
-  );
-}
-
-function SiteFooter() {
-  return (
-    <footer className="border-t border-border">
-      <div className="mx-auto flex w-full max-w-5xl flex-col gap-2 px-6 py-4 text-xs text-muted-foreground sm:flex-row sm:items-center sm:justify-between">
-        <span>
-          Vercel SA take-home · Claude Haiku 4.5 specialists · Sonnet 4.6 synth
-        </span>
-        <span className="flex items-center gap-3">
-          <span>Next.js 16 · AI SDK 6 · Fluid Compute</span>
-          <span className="text-border">·</span>
-          <a
-            href="https://github.com/DawsonLind/slowroast"
-            target="_blank"
-            rel="noreferrer"
-            className="rounded-sm outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
-          >
-            GitHub ↗
-          </a>
-        </span>
-      </div>
-    </footer>
   );
 }

@@ -3,7 +3,7 @@
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
-const EXAMPLE_URL = "https://vercel.com";
+const EXAMPLE_URL = "https://gov.uk";
 
 export function UrlForm({
   url,
@@ -41,12 +41,12 @@ export function UrlForm({
           disabled={isLoading}
           className="h-12 font-mono text-base sm:flex-1"
         />
-        <div className="flex gap-2">
+        <div className="flex w-full gap-2 sm:w-auto">
           <Button
             type="submit"
             size="lg"
             disabled={isLoading || url.trim() === ""}
-            className="group h-12 px-6 transition-all hover:shadow-[0_0_24px_-4px_var(--color-primary)]"
+            className="group h-12 flex-1 px-6 transition-all hover:shadow-[0_0_24px_-4px_var(--color-primary)] sm:flex-none"
           >
             <span className="font-medium">
               {isLoading ? "Analyzing…" : "Analyze"}
@@ -74,12 +74,12 @@ export function UrlForm({
         </div>
       </form>
       {!isLoading ? (
-        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+        <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
           <span>Try an example:</span>
           <button
             type="button"
             onClick={() => onUrlChange(EXAMPLE_URL)}
-            className="rounded-full bg-muted px-2 py-0.5 font-mono hover:bg-muted/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+            className="break-all rounded-full bg-muted px-2.5 py-1 font-mono hover:bg-muted/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
           >
             {EXAMPLE_URL}
           </button>
