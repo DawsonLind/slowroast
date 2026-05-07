@@ -28,10 +28,12 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" suppressHydrationWarning className="h-full">
-      <body
-        className={`${inter.variable} ${jetbrainsMono.variable} flex min-h-full flex-col antialiased`}
-      >
+    <html
+      lang="en"
+      suppressHydrationWarning
+      className={`${inter.variable} ${jetbrainsMono.variable} h-full`}
+    >
+      <body className="flex min-h-full flex-col antialiased">
         <ThemeProvider
           attribute="class"
           defaultTheme="dark"
