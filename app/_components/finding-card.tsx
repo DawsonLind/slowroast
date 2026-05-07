@@ -7,6 +7,7 @@ import {
 import type { Finding } from "@/lib/schemas";
 import { SPECIALIST_META } from "@/lib/ui-meta";
 import { SeverityBadge } from "./severity-badge";
+import { CopyMarkdownButton } from "./copy-markdown-button";
 
 export function FindingCard({
   finding,
@@ -29,19 +30,22 @@ export function FindingCard({
     >
       <CardHeader>
         <div className="flex items-center justify-between gap-3">
-          <div className="flex items-center gap-2">
+          <div className="flex min-w-0 items-center gap-2">
             <span
               className={cn(
-                "inline-block h-1.5 w-1.5 rounded-full",
+                "inline-block h-1.5 w-1.5 shrink-0 rounded-full",
                 meta.accentBg,
               )}
               aria-hidden
             />
-            <span className="text-xs uppercase tracking-wider text-muted-foreground">
+            <span className="truncate text-xs uppercase tracking-wider text-muted-foreground">
               {emphasis ? `Top priority · ${meta.shortLabel}` : meta.shortLabel}
             </span>
           </div>
-          <SeverityBadge severity={finding.severity} />
+          <div className="flex shrink-0 items-center gap-1.5">
+            <CopyMarkdownButton finding={finding} />
+            <SeverityBadge severity={finding.severity} />
+          </div>
         </div>
         <CardTitle className={cn(emphasis ? "text-xl leading-snug" : undefined)}>
           {finding.title}
@@ -60,11 +64,15 @@ function FindingBody({ finding }: { finding: Finding }) {
   );
   return (
     <>
-      <dl className="grid grid-cols-1 gap-x-6 gap-y-2 text-sm sm:grid-cols-[auto_1fr]">
+      <dl className="grid grid-cols-1 gap-x-6 gap-y-2 text-sm sm:grid-cols-[auto_minmax(0,1fr)]">
         <dt className="text-muted-foreground">Evidence</dt>
-        <dd className="leading-relaxed">{finding.evidence}</dd>
+        <dd className="min-w-0 leading-relaxed [overflow-wrap:anywhere]">
+          {finding.evidence}
+        </dd>
         <dt className="text-muted-foreground">Estimated impact</dt>
-        <dd>{finding.estimatedImpact}</dd>
+        <dd className="min-w-0 [overflow-wrap:anywhere]">
+          {finding.estimatedImpact}
+        </dd>
         <dt className="text-muted-foreground">Confidence</dt>
         <dd>
           <ConfidenceMeter value={finding.confidence} />
@@ -72,9 +80,9 @@ function FindingBody({ finding }: { finding: Finding }) {
         {finding.affectedResources.length > 0 ? (
           <>
             <dt className="text-muted-foreground">Affected resources</dt>
-            <dd className="flex flex-col gap-1 font-mono text-xs">
+            <dd className="flex min-w-0 flex-col gap-1 font-mono text-xs">
               {finding.affectedResources.slice(0, 4).map((r, i) => (
-                <span key={i} className="truncate" title={r}>
+                <span key={i} className="break-all" title={r}>
                   {r}
                 </span>
               ))}

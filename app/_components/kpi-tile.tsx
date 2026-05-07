@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 
@@ -24,7 +24,7 @@ const ACCENT_TEXT: Record<NonNullable<KpiTileProps["accent"]>, string> = {
   bundle: "text-roast-bundle",
   cache: "text-roast-cache",
   cwv: "text-roast-cwv",
-  positive: "text-emerald-400",
+  positive: "text-[color:var(--color-roast-positive)]",
   neutral: "text-foreground",
 };
 
@@ -83,38 +83,34 @@ function formatValue(n: number, kind: KpiFormat): string {
   }
 }
 
-// Linear count-up over `durationMs`. Always initializes to `target` so the
-// server-rendered HTML matches the initial client render (no hydration
-// mismatch). After hydration we kick off the count-up from 0 → target;
-// under prefers-reduced-motion we skip the animation entirely.
+// Eased count-up over `durationMs`. Initial state is `target` so SSR HTML
+// matches the first client render (no hydration mismatch); the rAF loop
+// snaps to 0 on its first tick (t=0 → eased=0) and animates up to target.
+// Under prefers-reduced-motion we collapse duration to 0 so the first tick
+// resolves at t=1 immediately.
+//
+// All setValue calls happen inside the rAF callback rather than synchronously
+// in the effect body — that's required by react-hooks/set-state-in-effect.
 function useCountUp(target: number, durationMs: number): number {
   const [value, setValue] = useState(target);
-  const startRef = useRef<number | null>(null);
-  const rafRef = useRef<number | null>(null);
 
   useEffect(() => {
-    const reduced = window.matchMedia?.("(prefers-reduced-motion: reduce)");
-    if (reduced?.matches) {
-      setValue(target);
-      return;
-    }
-    setValue(0);
-    startRef.current = null;
+    const reducedMq = window.matchMedia?.("(prefers-reduced-motion: reduce)");
+    const duration = reducedMq?.matches ? 0 : durationMs;
+
+    let raf: number | null = null;
+    let start: number | null = null;
     const tick = (ts: number) => {
-      if (startRef.current === null) startRef.current = ts;
-      const elapsed = ts - startRef.current;
-      const t = Math.min(1, elapsed / durationMs);
+      if (start === null) start = ts;
+      const elapsed = ts - start;
+      const t = duration === 0 ? 1 : Math.min(1, elapsed / duration);
       const eased = 1 - Math.pow(1 - t, 3);
       setValue(target * eased);
-      if (t < 1) {
-        rafRef.current = requestAnimationFrame(tick);
-      } else {
-        setValue(target);
-      }
+      if (t < 1) raf = requestAnimationFrame(tick);
     };
-    rafRef.current = requestAnimationFrame(tick);
+    raf = requestAnimationFrame(tick);
     return () => {
-      if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
+      if (raf !== null) cancelAnimationFrame(raf);
     };
   }, [target, durationMs]);
 

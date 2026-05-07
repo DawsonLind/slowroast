@@ -165,8 +165,8 @@ function SynthBack({ status, report, errorMessage, errorKind, onRetry }: SynthCa
       <Card className="ring-2 ring-primary/30">
         <CardHeader>
           <div className="flex items-start justify-between gap-3">
-            <div className="flex flex-col gap-1">
-              <div className="text-xs uppercase tracking-wider text-muted-foreground">
+            <div className="flex min-w-0 flex-col gap-1">
+              <div className="break-all text-xs uppercase tracking-wider text-muted-foreground">
                 Executive summary · {hostFor(report.url)}
               </div>
               <CardTitle className="text-lg leading-snug">
@@ -275,7 +275,7 @@ function SynthErrorBack({
 function ExecutiveSummaryBody({ summary }: { summary: string }) {
   const paragraphs = summary.split(/\n{2,}/).map((p) => p.trim()).filter(Boolean);
   return (
-    <div className="flex flex-col gap-3 text-sm leading-relaxed text-foreground/90">
+    <div className="flex min-w-0 flex-col gap-3 text-sm leading-relaxed text-foreground/90 [overflow-wrap:anywhere]">
       {paragraphs.map((para, i) => (
         <p key={i}>{renderInlineMarkdown(para)}</p>
       ))}
@@ -305,7 +305,7 @@ function renderInlineMarkdown(text: string): React.ReactNode[] {
     const t = tokens[i];
     if (t.kind === "text") nodes.push(t.value);
     else if (t.kind === "bold") nodes.push(<strong key={i} className="font-semibold text-foreground">{t.value}</strong>);
-    else nodes.push(<code key={i} className="rounded bg-muted px-1 py-0.5 font-mono text-[0.85em]">{t.value}</code>);
+    else nodes.push(<code key={i} className="break-all rounded bg-muted px-1 py-0.5 font-mono text-[0.85em]">{t.value}</code>);
   }
   return nodes;
 }
@@ -318,12 +318,36 @@ const GRADE_TONE: Record<
   SlowroastScoreReport["grade"],
   { ring: string; text: string; bg: string }
 > = {
-  "A+": { ring: "ring-emerald-500/40", text: "text-emerald-600 dark:text-emerald-400", bg: "bg-emerald-500/10" },
-  A: { ring: "ring-emerald-500/30", text: "text-emerald-600 dark:text-emerald-400", bg: "bg-emerald-500/10" },
-  B: { ring: "ring-sky-500/30", text: "text-sky-600 dark:text-sky-400", bg: "bg-sky-500/10" },
-  C: { ring: "ring-amber-500/30", text: "text-amber-600 dark:text-amber-400", bg: "bg-amber-500/10" },
-  D: { ring: "ring-orange-500/30", text: "text-orange-600 dark:text-orange-400", bg: "bg-orange-500/10" },
-  F: { ring: "ring-rose-500/30", text: "text-rose-600 dark:text-rose-400", bg: "bg-rose-500/10" },
+  "A+": {
+    ring: "ring-[color:var(--color-roast-positive)]/40",
+    text: "text-[color:var(--color-roast-positive)]",
+    bg: "bg-[color:var(--color-roast-positive)]/10",
+  },
+  A: {
+    ring: "ring-[color:var(--color-roast-positive)]/30",
+    text: "text-[color:var(--color-roast-positive)]",
+    bg: "bg-[color:var(--color-roast-positive)]/10",
+  },
+  B: {
+    ring: "ring-roast-cache/30",
+    text: "text-roast-cache",
+    bg: "bg-roast-cache/10",
+  },
+  C: {
+    ring: "ring-sev-medium/30",
+    text: "text-sev-medium",
+    bg: "bg-sev-medium/10",
+  },
+  D: {
+    ring: "ring-sev-high/30",
+    text: "text-sev-high",
+    bg: "bg-sev-high/10",
+  },
+  F: {
+    ring: "ring-sev-critical/30",
+    text: "text-sev-critical",
+    bg: "bg-sev-critical/10",
+  },
 };
 
 function ScoreBadge({ score }: { score: SlowroastScoreReport }) {

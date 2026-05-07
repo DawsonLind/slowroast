@@ -23,7 +23,11 @@ import { SPECIALIST_META, SPECIALIST_ORDER } from "@/lib/ui-meta";
 import { UrlForm } from "./url-form";
 import { SpecialistGrid, type SpecialistViewState } from "./specialist-grid";
 import { SynthCard, type SynthStatus } from "./synth-card";
-import { PsiCard } from "./psi-card";
+import {
+  PipelineStatus,
+  type PipelineStatusProps,
+  type PhaseStatus as PipelinePhaseStatus,
+} from "./pipeline-status";
 import { FindingsList } from "./findings-list";
 
 // Zod shape for the "result" event payload. Kept local because it's only
@@ -85,6 +89,13 @@ type AnalyzeState =
       specialists: SpecialistRuntimeMap;
       phases: PhaseRuntime;
       synthStatus: "waiting" | "synthesizing";
+      // Wall-clock timestamp the moment PSI flips to done (≈ end of the
+      // data-collection phase — HTML is almost always faster than PSI). Lets
+      // PipelineStatus compute per-phase elapsed without the server emitting
+      // explicit phase-boundary timings.
+      dataCompletedAt?: number;
+      // Wall-clock timestamp synth began ranking. Set once synth fires "start".
+      synthStartedAt?: number;
     }
   | {
       kind: "success";
@@ -97,6 +108,10 @@ type AnalyzeState =
       error: string;
       message?: string;
       specialists?: SpecialistRuntimeMap;
+      phases?: PhaseRuntime;
+      dataCompletedAt?: number;
+      synthStartedAt?: number;
+      startedAt?: number;
     };
 
 function initSpecialists(): SpecialistRuntimeMap {
@@ -109,7 +124,7 @@ function initSpecialists(): SpecialistRuntimeMap {
 }
 
 export function Analyzer() {
-  const [url, setUrl] = useState("https://vercel.com");
+  const [url, setUrl] = useState("https://gov.uk");
   const [state, setState] = useState<AnalyzeState>({ kind: "idle" });
   // Tick for elapsed-counter animation. Real per-specialist start/end
   // timestamps are authoritative — this just triggers re-renders so the
@@ -152,22 +167,24 @@ export function Analyzer() {
 
       if (!res.ok) {
         const errBody = (await res.json().catch(() => ({}))) as ErrorResponse;
-        setState({
-          kind: "error",
-          status: res.status,
-          error: errBody.error ?? `http_${res.status}`,
-          message: errBody.message,
-        });
+        setState((prev) =>
+          carryError(prev, {
+            status: res.status,
+            error: errBody.error ?? `http_${res.status}`,
+            message: errBody.message,
+          }),
+        );
         return;
       }
 
       if (!res.body) {
-        setState({
-          kind: "error",
-          status: 0,
-          error: "network",
-          message: "Response body is empty.",
-        });
+        setState((prev) =>
+          carryError(prev, {
+            status: 0,
+            error: "network",
+            message: "Response body is empty.",
+          }),
+        );
         return;
       }
 
@@ -176,12 +193,13 @@ export function Analyzer() {
       );
     } catch (err) {
       if (err instanceof DOMException && err.name === "AbortError") return;
-      setState({
-        kind: "error",
-        status: 0,
-        error: "network",
-        message: err instanceof Error ? err.message : String(err),
-      });
+      setState((prev) =>
+        carryError(prev, {
+          status: 0,
+          error: "network",
+          message: err instanceof Error ? err.message : String(err),
+        }),
+      );
     }
   }
 
@@ -201,7 +219,11 @@ export function Analyzer() {
   };
 
   const totalElapsedMs =
-    state.kind === "analyzing" ? Date.now() - state.startedAt : 0;
+    state.kind === "analyzing"
+      ? Date.now() - state.startedAt
+      : state.kind === "error" && state.startedAt
+        ? Date.now() - state.startedAt
+        : 0;
 
   const specialistStates = computeSpecialistStates(state);
   const synthStatus = computeSynthStatus(state);
@@ -238,11 +260,9 @@ export function Analyzer() {
 
       {state.kind !== "idle" ? (
         <>
-          {state.kind === "analyzing" && state.phases.psi !== "done" ? (
-            <PsiCard
-              psiStatus={state.phases.psi}
-              htmlStatus={state.phases.html}
-              elapsedMs={totalElapsedMs}
+          {state.kind === "analyzing" || state.kind === "error" ? (
+            <PipelineStatus
+              {...buildPipelineStatusProps(state, totalElapsedMs)}
             />
           ) : null}
           <SpecialistGrid
@@ -331,7 +351,18 @@ function reduceEvent(prev: AnalyzeState, event: ProgressEvent): AnalyzeState {
   if (event.type === "phase") {
     const next: PhaseRuntime = { ...prev.phases };
     next[event.phase] = event.status === "start" ? "running" : "done";
-    return { ...prev, phases: next };
+    // Capture the moment PSI flips to done — that's our data-collection
+    // boundary. (HTML usually finishes earlier; we anchor to the slower of
+    // the two so the spec-phase timer doesn't start before data is in.)
+    let dataCompletedAt = prev.dataCompletedAt;
+    if (
+      event.phase === "psi" &&
+      event.status === "done" &&
+      dataCompletedAt == null
+    ) {
+      dataCompletedAt = Date.now();
+    }
+    return { ...prev, phases: next, dataCompletedAt };
   }
 
   if (event.type === "specialist") {
@@ -368,7 +399,11 @@ function reduceEvent(prev: AnalyzeState, event: ProgressEvent): AnalyzeState {
     // after; we keep synthStatus as "synthesizing" in the meantime so the card
     // never briefly regresses.
     if (event.status === "start") {
-      return { ...prev, synthStatus: "synthesizing" };
+      return {
+        ...prev,
+        synthStatus: "synthesizing",
+        synthStartedAt: prev.synthStartedAt ?? Date.now(),
+      };
     }
     return prev;
   }
@@ -391,6 +426,10 @@ function reduceEvent(prev: AnalyzeState, event: ProgressEvent): AnalyzeState {
         error: "invalid_result",
         message: "Server returned a result that didn't match the expected shape.",
         specialists: prev.specialists,
+        phases: prev.phases,
+        dataCompletedAt: prev.dataCompletedAt,
+        synthStartedAt: prev.synthStartedAt,
+        startedAt: prev.startedAt,
       };
     }
     return {
@@ -407,6 +446,31 @@ function reduceEvent(prev: AnalyzeState, event: ProgressEvent): AnalyzeState {
     error: event.kind,
     message: event.message,
     specialists: prev.specialists,
+    phases: prev.phases,
+    dataCompletedAt: prev.dataCompletedAt,
+    synthStartedAt: prev.synthStartedAt,
+    startedAt: prev.startedAt,
+  };
+}
+
+// Build an error state that preserves whatever progress (phases, specialists,
+// timings) we observed before the failure, so PipelineStatus can render the
+// "halted at X phase" view rather than collapsing back to a fresh card.
+function carryError(
+  prev: AnalyzeState,
+  err: { status: number; error: string; message?: string },
+): AnalyzeState {
+  if (prev.kind !== "analyzing") {
+    return { kind: "error", ...err };
+  }
+  return {
+    kind: "error",
+    ...err,
+    specialists: prev.specialists,
+    phases: prev.phases,
+    dataCompletedAt: prev.dataCompletedAt,
+    synthStartedAt: prev.synthStartedAt,
+    startedAt: prev.startedAt,
   };
 }
 
@@ -532,6 +596,183 @@ function buildSynthProps(
   };
 }
 
+// ---------------------------------------------------------------------------
+// PipelineStatus props derivation. The component renders a 3-row pipeline
+// (data → specialists → synth); we project the analyzer's runtime state into
+// status + duration per row, plus a one-line "what's happening now" headline.
+// ---------------------------------------------------------------------------
+
+function buildPipelineStatusProps(
+  state: AnalyzeState,
+  totalElapsedMs: number,
+): PipelineStatusProps {
+  if (state.kind !== "analyzing" && state.kind !== "error") {
+    // Defensive — caller only renders for these two states. Returning a
+    // pending shell keeps types honest without a noisy fallback view.
+    return {
+      elapsedMs: totalElapsedMs,
+      headline: "Idle",
+      variant: "running",
+      data: { status: "pending" },
+      specialists: {
+        status: "pending",
+        doneCount: 0,
+        runningLabels: [],
+      },
+      synth: { status: "pending" },
+    };
+  }
+
+  const isError = state.kind === "error";
+  const startedAt = state.startedAt;
+  const phases = state.phases;
+  const specialistsMap = state.specialists ?? {
+    image: { status: "pending" },
+    bundle: { status: "pending" },
+    cache: { status: "pending" },
+    cwv: { status: "pending" },
+  };
+  const dataCompletedAt = state.dataCompletedAt;
+  const synthStartedAt = state.synthStartedAt;
+
+  // ---- Data phase
+  const dataDone = phases?.psi === "done" && phases?.html === "done";
+  const dataRunning =
+    !dataDone && (phases?.psi === "running" || phases?.html === "running");
+  const dataStatus: PipelinePhaseStatus = dataDone
+    ? "done"
+    : dataRunning
+      ? isError
+        ? "failed"
+        : "running"
+      : "pending";
+  const dataDurationMs =
+    dataCompletedAt && startedAt != null
+      ? dataCompletedAt - startedAt
+      : dataRunning && startedAt != null
+        ? totalElapsedMs
+        : undefined;
+
+  // ---- Specialist phase
+  const specEntries = SPECIALIST_ORDER.map((cat) => specialistsMap[cat]);
+  const specDone = specEntries.filter((s) => s.status === "done").length;
+  const specFailed = specEntries.filter((s) => s.status === "failed").length;
+  const specRunning = specEntries.filter((s) => s.status === "running").length;
+  const specQueued = specEntries.filter((s) => s.status === "queued").length;
+  const specAnyStarted = specDone + specFailed + specRunning > 0;
+  const specAllResolved = specDone + specFailed === 4;
+  const specStatus: PipelinePhaseStatus = specAllResolved
+    ? specFailed > 0 && specDone === 0
+      ? "failed"
+      : "done"
+    : specAnyStarted
+      ? isError
+        ? "failed"
+        : "running"
+      : specQueued > 0
+        ? isError
+          ? "failed"
+          : "running"
+        : "pending";
+  const runningLabels = SPECIALIST_ORDER.filter(
+    (cat) => specialistsMap[cat].status === "running",
+  ).map((cat) => SPECIALIST_META[cat].shortLabel);
+  // Spec phase begins when data is done; the timer floor is the data
+  // completion stamp, ceiling is synth-start (or now, if specs still running).
+  const specStartedAt = dataCompletedAt;
+  const specEndAt =
+    synthStartedAt ??
+    (specAllResolved
+      ? // No synthStart yet but specs are all resolved — use the latest
+        // completion stamp from the runtime map as a best-effort upper bound.
+        latestCompleted(specEntries) ?? Date.now()
+      : Date.now());
+  const specDurationMs =
+    specStartedAt != null && specStatus !== "pending"
+      ? Math.max(0, specEndAt - specStartedAt)
+      : undefined;
+
+  // ---- Synth phase
+  const synthIsRunning = state.kind === "analyzing" && state.synthStatus === "synthesizing";
+  const synthStatus: PipelinePhaseStatus = synthIsRunning
+    ? isError
+      ? "failed"
+      : "running"
+    : isError && synthStartedAt != null
+      ? "failed"
+      : "pending";
+  const synthDurationMs =
+    synthStartedAt != null
+      ? Math.max(0, Date.now() - synthStartedAt)
+      : undefined;
+
+  return {
+    elapsedMs: totalElapsedMs,
+    headline: computeHeadline(state, {
+      dataStatus,
+      specStatus,
+      synthStatus,
+      runningLabels,
+      specDone,
+      specFailed,
+    }),
+    variant: isError ? "error" : "running",
+    data: { status: dataStatus, durationMs: dataDurationMs },
+    specialists: {
+      status: specStatus,
+      doneCount: specDone,
+      runningLabels,
+      durationMs: specDurationMs,
+    },
+    synth: { status: synthStatus, durationMs: synthDurationMs },
+  };
+}
+
+interface HeadlineCtx {
+  dataStatus: PipelinePhaseStatus;
+  specStatus: PipelinePhaseStatus;
+  synthStatus: PipelinePhaseStatus;
+  runningLabels: string[];
+  specDone: number;
+  specFailed: number;
+}
+
+function computeHeadline(state: AnalyzeState, ctx: HeadlineCtx): string {
+  if (state.kind === "error") {
+    if (ctx.synthStatus === "failed") return "Synthesizer failed — see error below";
+    if (ctx.specStatus === "failed") return "Specialist phase failed — see error below";
+    if (ctx.dataStatus === "failed") return "Data collection failed — see error below";
+    return "Pipeline halted — see error below";
+  }
+  if (ctx.dataStatus !== "done") {
+    return "Fetching PageSpeed Insights + raw HTML";
+  }
+  if (ctx.specStatus !== "done") {
+    if (ctx.runningLabels.length > 0) {
+      const list =
+        ctx.runningLabels.length === 1
+          ? ctx.runningLabels[0]
+          : `${ctx.runningLabels.length} specialists`;
+      return `Running ${list} in parallel`;
+    }
+    return `Specialists working (${ctx.specDone}/4 complete)`;
+  }
+  if (ctx.synthStatus === "running") {
+    return "Sonnet is ranking findings against the catalog";
+  }
+  return "Wrapping up the roadmap";
+}
+
+function latestCompleted(entries: SpecialistRuntime[]): number | undefined {
+  let max: number | undefined;
+  for (const e of entries) {
+    if (e.completedAt != null && (max == null || e.completedAt > max)) {
+      max = e.completedAt;
+    }
+  }
+  return max;
+}
+
 function fillStates(
   s: SpecialistViewState,
 ): Record<FindingCategory, SpecialistViewState> {
@@ -637,7 +878,7 @@ function ErrorBanner({
         </div>
         {hint ? <p className="text-muted-foreground">{hint}</p> : null}
         {state.message ? (
-          <p className="max-w-2xl font-mono text-[11px] text-muted-foreground/80">
+          <p className="max-w-2xl break-all font-mono text-[11px] text-muted-foreground/80">
             {state.message}
           </p>
         ) : null}

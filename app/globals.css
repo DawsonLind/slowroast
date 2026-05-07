@@ -70,9 +70,9 @@
   --radius-4xl: calc(var(--radius) * 2.6);
 }
 
-/* Light theme kept as fallback. The app ships `.dark` (see layout.tsx).
-   Keeping the light tokens means shadcn internals and any stray component
-   that assumes :root still resolve. */
+/* Light theme on :root; `.dark` is toggled by next-themes (see ThemeProvider
+   in layout). Keeping both token sets means shadcn internals resolve in
+   either mode. */
 :root {
   --background: oklch(0.98 0.003 80);
   --foreground: oklch(0.18 0.01 60);
@@ -178,12 +178,12 @@
     background-image:
       radial-gradient(
         ellipse 80% 50% at 50% -10%,
-        oklch(0.78 0.15 70 / 8%),
+        color-mix(in oklch, var(--primary) 10%, transparent),
         transparent 70%
       ),
       radial-gradient(
         ellipse 60% 40% at 90% 110%,
-        oklch(0.72 0.16 295 / 5%),
+        color-mix(in oklch, var(--chart-4) 8%, transparent),
         transparent 70%
       );
     background-attachment: fixed;
@@ -308,7 +308,7 @@
   .roast-bar {
     position: relative;
     overflow: hidden;
-    background: oklch(1 0 0 / 8%);
+    background: color-mix(in oklch, var(--foreground) 6%, transparent);
     border-radius: 999px;
   }
   .roast-bar::after {

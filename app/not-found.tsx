@@ -9,9 +9,8 @@ export default function NotFound() {
         404 - not found
       </h1>
       <p className="max-w-md text-sm text-muted-foreground">
-        Slowroast only exposes two routes:{" "}
-        <code className="font-mono">/</code> for the analyzer and{" "}
-        <code className="font-mono">/evals</code> for the dashboard.
+        Try <code className="font-mono">/</code> (analyzer) or{" "}
+        <code className="font-mono">/evals</code>.
       </p>
       <div className="flex gap-2">
         <Link href="/" className={cn(buttonVariants())}>
