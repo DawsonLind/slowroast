@@ -205,6 +205,7 @@ export function Analyzer() {
 
   function reset() {
     abortRef.current?.abort();
+    setUrl("");
     setState({ kind: "idle" });
   }
 
