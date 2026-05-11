@@ -207,14 +207,6 @@ function ResultsContent({ results }: { results: ResultsFile }) {
     ? 0
     : (meta.runsSucceeded / meta.runsAttempted) * 100;
 
-  const successfulUrls = urls.filter((u) => u.aggregates.successfulRuns > 0);
-  const consistentTopPriority = successfulUrls.filter(
-    (u) => u.aggregates.topPriorityConsistency.allSameId === true,
-  ).length;
-  const consistencyRate = successfulUrls.length === 0
-    ? 0
-    : (consistentTopPriority / successfulUrls.length) * 100;
-
   const aggregatePhases = aggregatePhaseTimings(urls);
   const uniqueFeaturesHit = countUniqueFeaturesHit(urls);
 
@@ -227,7 +219,7 @@ function ResultsContent({ results }: { results: ResultsFile }) {
 
   return (
     <div className="flex flex-col gap-8">
-      <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
+      <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <KpiTile
           label="Success rate"
           value={successRate}
@@ -241,13 +233,6 @@ function ResultsContent({ results }: { results: ResultsFile }) {
           format="int"
           accent="cache"
           sub={`${meta.runsPerUrl} runs each`}
-        />
-        <KpiTile
-          label="Top-priority stable"
-          value={consistencyRate}
-          format="percent"
-          accent={consistencyRate > 80 ? "positive" : "primary"}
-          sub={`${consistentTopPriority} of ${successfulUrls.length} URLs agree`}
         />
         <KpiTile
           label="End-to-end p50"
