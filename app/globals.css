@@ -190,6 +190,10 @@
   }
   html {
     @apply font-sans;
+    /* Always reserve gutter for the vertical scrollbar so content width
+       doesn't jump between short pages (no scrollbar) and long pages
+       (scrollbar present) — e.g. moving from `/` to `/evals`. */
+    scrollbar-gutter: stable;
   }
 }
 
